@@ -6,10 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ArrowLeft, XCircle, Send, FileText, PenTool } from 'lucide-react';
 import { format } from 'date-fns';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import PdfViewerWithSignature from '@/components/PdfViewerWithSignature';
 import { applySignatureToPdf, fetchPdfAsBytes, pdfBytesToDataUrl } from '@/lib/pdfUtils';
+import { getPdfUrl } from '@/lib/pdfStorage';
 
 const DocumentDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -164,6 +165,129 @@ const DocumentDetailPage = () => {
     return ROLE_LABELS[role as keyof typeof ROLE_LABELS] || role;
   };
 
+  // Componente para visualizar PDF assinado (com suporte a Storage)
+  const SignedPdfViewer = ({ signedPdfUrl, fileName }: { signedPdfUrl: string; fileName: string }) => {
+    const [displayUrl, setDisplayUrl] = useState<string | undefined>(undefined);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+      const loadPdfUrl = async () => {
+        try {
+          setLoading(true);
+          const url = await getPdfUrl(signedPdfUrl);
+          setDisplayUrl(url);
+        } catch (error) {
+          console.error('Erro ao carregar URL do PDF:', error);
+          toast({
+            title: 'Erro ao carregar PDF assinado',
+            description: 'Não foi possível carregar o PDF do Storage.',
+            variant: 'destructive',
+          });
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      loadPdfUrl();
+    }, [signedPdfUrl]);
+
+    const handleDownload = async () => {
+      try {
+        const url = await getPdfUrl(signedPdfUrl);
+        if (url) {
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${fileName.replace('.pdf', '')}_assinado.pdf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      } catch (error) {
+        console.error('Erro ao baixar PDF:', error);
+        toast({
+          title: 'Erro ao baixar PDF',
+          description: 'Não foi possível baixar o PDF assinado.',
+          variant: 'destructive',
+        });
+      }
+    };
+
+    if (loading) {
+      return (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Documento Assinado
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-center py-20">
+              <p className="text-muted-foreground">Carregando PDF...</p>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    if (!displayUrl) {
+      return (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Documento Assinado
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col items-center justify-center py-20 gap-4">
+              <p className="text-muted-foreground">PDF não disponível</p>
+              <Button onClick={handleDownload} variant="outline">
+                <FileText className="mr-2 h-4 w-4" />Tentar Baixar PDF
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Documento Assinado
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="relative w-full border rounded-lg overflow-hidden bg-muted" style={{ minHeight: '600px' }}>
+            <iframe
+              src={displayUrl}
+              className="w-full h-full"
+              style={{ minHeight: '600px' }}
+              title="PDF Assinado"
+              onError={() => {
+                toast({
+                  title: 'Erro ao carregar PDF assinado',
+                  description: 'O PDF assinado não pôde ser exibido. Tente baixar o arquivo.',
+                  variant: 'destructive',
+                });
+              }}
+            />
+          </div>
+          <div className="mt-4 flex justify-center gap-2">
+            <Button variant="outline" onClick={handleDownload}>
+              <FileText className="mr-2 h-4 w-4" />Baixar PDF Assinado
+            </Button>
+          </div>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            Este documento foi assinado digitalmente e está finalizado.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <div className="mx-auto max-w-3xl animate-fade-in space-y-6">
       <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
@@ -204,58 +328,7 @@ const DocumentDetailPage = () => {
 
       {/* Visualização do PDF assinado - para documentos finalizados */}
       {doc.status === 'finalizado' && doc.signedPdfUrl && !isConselhoSigning && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Documento Assinado
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="relative w-full border rounded-lg overflow-hidden bg-muted" style={{ minHeight: '600px' }}>
-              <iframe
-                src={doc.signedPdfUrl}
-                className="w-full h-full"
-                style={{ minHeight: '600px' }}
-                title="PDF Assinado"
-                onError={() => {
-                  toast({
-                    title: 'Erro ao carregar PDF assinado',
-                    description: 'O PDF assinado não pôde ser exibido. Tente baixar o arquivo.',
-                    variant: 'destructive',
-                  });
-                }}
-              />
-            </div>
-            <div className="mt-4 flex justify-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  try {
-                    const link = document.createElement('a');
-                    link.href = doc.signedPdfUrl!;
-                    link.download = `${doc.fileName.replace('.pdf', '')}_assinado.pdf`;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                  } catch (error) {
-                    toast({
-                      title: 'Erro ao baixar PDF',
-                      description: 'Não foi possível baixar o PDF assinado.',
-                      variant: 'destructive',
-                    });
-                  }
-                }}
-              >
-                <FileText className="mr-2 h-4 w-4" />
-                Baixar PDF Assinado
-              </Button>
-            </div>
-            <p className="mt-2 text-center text-xs text-muted-foreground">
-              Este documento foi assinado digitalmente e está finalizado.
-            </p>
-          </CardContent>
-        </Card>
+        <SignedPdfViewer signedPdfUrl={doc.signedPdfUrl} fileName={doc.fileName} />
       )}
 
       <Card>

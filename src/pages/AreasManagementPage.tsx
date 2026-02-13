@@ -82,7 +82,7 @@ const AreasManagementPage = () => {
     setIsDeleteDialogOpen(true);
   };
 
-  const handleSubmitCreate = () => {
+  const handleSubmitCreate = async () => {
     if (!formData.name || !formData.code) {
       toast({
         title: 'Erro',
@@ -92,21 +92,31 @@ const AreasManagementPage = () => {
       return;
     }
 
-    createArea({
-      name: formData.name,
-      code: formData.code,
-      description: formData.description || undefined,
-    });
+    try {
+      await createArea({
+        name: formData.name,
+        code: formData.code,
+        description: formData.description || undefined,
+      });
 
-    toast({
-      title: 'Sucesso',
-      description: 'Área criada com sucesso.',
-    });
+      toast({
+        title: 'Sucesso',
+        description: 'Área criada com sucesso.',
+      });
 
-    setIsCreateDialogOpen(false);
+      setIsCreateDialogOpen(false);
+      setFormData({ name: '', code: '', description: '' });
+    } catch (error) {
+      console.error('Erro ao criar área:', error);
+      toast({
+        title: 'Erro',
+        description: error instanceof Error ? error.message : 'Não foi possível criar a área.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const handleSubmitEdit = () => {
+  const handleSubmitEdit = async () => {
     if (!selectedArea || !formData.name || !formData.code) {
       toast({
         title: 'Erro',
@@ -116,31 +126,53 @@ const AreasManagementPage = () => {
       return;
     }
 
-    updateArea(selectedArea.id, {
-      name: formData.name,
-      code: formData.code,
-      description: formData.description || undefined,
-    });
+    try {
+      await updateArea(selectedArea.id, {
+        name: formData.name,
+        code: formData.code,
+        description: formData.description || undefined,
+      });
 
-    toast({
-      title: 'Sucesso',
-      description: 'Área atualizada com sucesso.',
-    });
+      toast({
+        title: 'Sucesso',
+        description: 'Área atualizada com sucesso.',
+      });
 
-    setIsEditDialogOpen(false);
-    setSelectedArea(null);
+      setIsEditDialogOpen(false);
+      setSelectedArea(null);
+      setFormData({ name: '', code: '', description: '' });
+    } catch (error) {
+      console.error('Erro ao atualizar área:', error);
+      toast({
+        title: 'Erro',
+        description: error instanceof Error ? error.message : 'Não foi possível atualizar a área.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const handleConfirmDelete = () => {
-    if (deleteAreaId) {
-      deleteArea(deleteAreaId);
+  const handleConfirmDelete = async () => {
+    if (!deleteAreaId) {
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+
+    try {
+      await deleteArea(deleteAreaId);
       toast({
         title: 'Sucesso',
         description: 'Área excluída com sucesso.',
       });
       setDeleteAreaId(null);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error('Erro ao deletar área:', error);
+      toast({
+        title: 'Erro',
+        description: error instanceof Error ? error.message : 'Não foi possível excluir a área.',
+        variant: 'destructive',
+      });
     }
-    setIsDeleteDialogOpen(false);
   };
 
   return (

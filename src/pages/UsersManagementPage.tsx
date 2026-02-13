@@ -51,11 +51,13 @@ const UsersManagementPage = () => {
     email: string;
     role: UserRole;
     department?: Department;
+    password: string;
   }>({
     name: '',
     email: '',
     role: 'area',
     department: undefined,
+    password: '',
   });
 
   if (!user || user.role !== 'master') {
@@ -71,7 +73,7 @@ const UsersManagementPage = () => {
   }
 
   const handleCreate = () => {
-    setFormData({ name: '', email: '', role: 'area', department: undefined });
+    setFormData({ name: '', email: '', role: 'area', department: undefined, password: '' });
     setIsCreateDialogOpen(true);
   };
 
@@ -91,11 +93,20 @@ const UsersManagementPage = () => {
     setIsDeleteDialogOpen(true);
   };
 
-  const handleSubmitCreate = () => {
-    if (!formData.name || !formData.email) {
+  const handleSubmitCreate = async () => {
+    if (!formData.name || !formData.email || !formData.password) {
       toast({
         title: 'Erro',
-        description: 'Preencha todos os campos obrigatórios.',
+        description: 'Preencha todos os campos obrigatórios (nome, email e senha).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (formData.password.length < 6) {
+      toast({
+        title: 'Erro',
+        description: 'A senha deve ter pelo menos 6 caracteres.',
         variant: 'destructive',
       });
       return;
@@ -110,22 +121,33 @@ const UsersManagementPage = () => {
       return;
     }
 
-    createUser({
-      name: formData.name,
-      email: formData.email,
-      role: formData.role,
-      department: formData.role === 'area' ? formData.department : undefined,
-    });
+    try {
+      await createUser({
+        name: formData.name,
+        email: formData.email,
+        role: formData.role,
+        department: formData.role === 'area' ? formData.department : undefined,
+        password: formData.password,
+      });
 
-    toast({
-      title: 'Sucesso',
-      description: 'Usuário criado com sucesso.',
-    });
+      toast({
+        title: 'Sucesso',
+        description: 'Usuário criado com sucesso. Ele pode fazer login com email e senha.',
+      });
 
-    setIsCreateDialogOpen(false);
+      setIsCreateDialogOpen(false);
+      setFormData({ name: '', email: '', role: 'area', department: undefined, password: '' });
+    } catch (error) {
+      console.error('Erro ao criar usuário:', error);
+      toast({
+        title: 'Erro',
+        description: error instanceof Error ? error.message : 'Não foi possível criar o usuário.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const handleSubmitEdit = () => {
+  const handleSubmitEdit = async () => {
     if (!selectedUser || !formData.name || !formData.email) {
       toast({
         title: 'Erro',
@@ -144,32 +166,54 @@ const UsersManagementPage = () => {
       return;
     }
 
-    updateUser(selectedUser.id, {
-      name: formData.name,
-      email: formData.email,
-      role: formData.role,
-      department: formData.role === 'area' ? formData.department : undefined,
-    });
+    try {
+      await updateUser(selectedUser.id, {
+        name: formData.name,
+        email: formData.email,
+        role: formData.role,
+        department: formData.role === 'area' ? formData.department : undefined,
+      });
 
-    toast({
-      title: 'Sucesso',
-      description: 'Usuário atualizado com sucesso.',
-    });
+      toast({
+        title: 'Sucesso',
+        description: 'Usuário atualizado com sucesso.',
+      });
 
-    setIsEditDialogOpen(false);
-    setSelectedUser(null);
+      setIsEditDialogOpen(false);
+      setSelectedUser(null);
+      setFormData({ name: '', email: '', role: 'area', department: undefined });
+    } catch (error) {
+      console.error('Erro ao atualizar usuário:', error);
+      toast({
+        title: 'Erro',
+        description: error instanceof Error ? error.message : 'Não foi possível atualizar o usuário.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const handleConfirmDelete = () => {
-    if (deleteUserId) {
-      deleteUser(deleteUserId);
+  const handleConfirmDelete = async () => {
+    if (!deleteUserId) {
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+
+    try {
+      await deleteUser(deleteUserId);
       toast({
         title: 'Sucesso',
         description: 'Usuário excluído com sucesso.',
       });
       setDeleteUserId(null);
+      setIsDeleteDialogOpen(false);
+    } catch (error) {
+      console.error('Erro ao deletar usuário:', error);
+      toast({
+        title: 'Erro',
+        description: error instanceof Error ? error.message : 'Não foi possível excluir o usuário.',
+        variant: 'destructive',
+      });
     }
-    setIsDeleteDialogOpen(false);
   };
 
   return (
@@ -262,6 +306,18 @@ const UsersManagementPage = () => {
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 placeholder="email@exemplo.com"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Senha</Label>
+              <Input
+                id="password"
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                placeholder="Mínimo 6 caracteres"
+                minLength={6}
+              />
+              <p className="text-xs text-muted-foreground">A senha será usada para login no sistema</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="role">Função</Label>

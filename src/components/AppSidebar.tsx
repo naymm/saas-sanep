@@ -71,7 +71,11 @@ const AppSidebar = ({ open, onClose }: SidebarProps) => {
 
         <div className="p-3">
           <button
-            onClick={logout}
+            onClick={async () => {
+              await logout();
+              // Redirecionar para login após logout
+              window.location.href = '/login';
+            }}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-muted transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
           >
             <LogOut className="h-4 w-4" />

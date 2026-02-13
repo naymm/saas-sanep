@@ -13,13 +13,37 @@ const ProfilePage = () => {
   const updateStamp = useStore((s) => s.updateStamp);
   const { toast } = useToast();
 
-  const handleFileUpload = (type: 'signature' | 'stamp') => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (type: 'signature' | 'stamp') => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    if (type === 'signature') updateSignature(url);
-    else updateStamp(url);
-    toast({ title: `${type === 'signature' ? 'Assinatura' : 'Carimbo'} atualizado com sucesso!` });
+
+    // Validar tipo de arquivo
+    if (!file.type.startsWith('image/')) {
+      toast({ 
+        title: 'Erro', 
+        description: 'Por favor, selecione um arquivo de imagem (PNG, JPG, etc.)',
+        variant: 'destructive' 
+      });
+      return;
+    }
+
+    try {
+      // Fazer upload direto do File para o Storage
+      if (type === 'signature') {
+        await updateSignature(file);
+        toast({ title: 'Assinatura atualizada com sucesso!' });
+      } else {
+        await updateStamp(file);
+        toast({ title: 'Carimbo atualizado com sucesso!' });
+      }
+    } catch (error) {
+      console.error(`Erro ao fazer upload do ${type}:`, error);
+      toast({ 
+        title: 'Erro', 
+        description: `Não foi possível fazer upload do ${type === 'signature' ? 'assinatura' : 'carimbo'}.`,
+        variant: 'destructive' 
+      });
+    }
   };
 
   return (

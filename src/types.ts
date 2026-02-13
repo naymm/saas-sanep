@@ -19,6 +19,7 @@ export interface User {
   department?: Department;
   signatureUrl?: string;
   stampUrl?: string;
+  authUserId?: string; // ID do usuário no Supabase Auth
 }
 
 export type DocumentType = 'memorando' | 'oficio' | 'relatorio' | 'contrato' | 'outro';
@@ -47,7 +48,9 @@ export interface Document {
   type: DocumentType;
   description: string;
   fileName: string;
+  originalPdfStoragePath?: string; // Caminho do PDF original no Storage
   signedPdfUrl?: string; // URL do PDF assinado (data URL ou blob URL)
+  signedPdfStoragePath?: string; // Caminho do PDF assinado no Storage
   createdBy: string;
   createdByName: string;
   createdByRole: UserRole;

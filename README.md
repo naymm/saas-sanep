@@ -1,73 +1,120 @@
-# Welcome to your Lovable project
+# Fluxo Seguro - Sistema de Gestão de Documentos
 
-## Project info
+Sistema de gestão de fluxo de documentos com assinatura digital integrada ao Supabase.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## 🚀 Configuração Inicial
 
-## How can I edit this code?
+### 1. Instalar Dependências
 
-There are several ways of editing your application.
+```bash
+npm install
+```
 
-**Use Lovable**
+### 2. Configurar Supabase
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+1. Crie um projeto no [Supabase](https://app.supabase.com)
+2. Crie um arquivo `.env` na raiz do projeto:
 
-Changes made via Lovable will be committed automatically to this repo.
+```env
+VITE_SUPABASE_URL=sua_url_do_supabase
+VITE_SUPABASE_ANON_KEY=sua_chave_anon
+```
 
-**Use your preferred IDE**
+3. Execute os scripts SQL no SQL Editor do Supabase (nesta ordem):
+   - `supabase/schema.sql` - Cria todas as tabelas e políticas
+   - `supabase/storage-setup.sql` - Configura o Storage para PDFs
+   - `supabase/seed.sql` - Insere dados iniciais (usuários, áreas, documentos)
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### 3. Executar o Projeto
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```bash
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+## 📋 Dados Iniciais
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+O script `seed.sql` cria:
 
-**Use GitHub Codespaces**
+- **6 Usuários:**
+  - Carlos Mendes (rh@gov.ao) - Área - Capital Humano
+  - Ana Silva (secretaria@gov.ao) - Secretaria Geral
+  - João Ferreira (conselho@gov.ao) - Conselho de Administração
+  - Pedro Neto (juridico@gov.ao) - Área - Jurídico
+  - Luísa Gomes (financas@gov.ao) - Área - Finanças
+  - Administrador Master (master@gov.ao) - Master
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+- **3 Áreas:**
+  - Capital Humano (CH)
+  - Jurídico (JUR)
+  - Finanças (FIN)
 
-## What technologies are used for this project?
+- **5 Documentos de exemplo** em diferentes status
 
-This project is built with:
+- **5 Notificações** relacionadas aos documentos
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 🔐 Login
 
-## How can I deploy this project?
+Use qualquer email dos usuários cadastrados para fazer login. A senha não é validada no momento (autenticação simples por email).
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+### Criar Usuário Master
 
-## Can I connect a custom domain to my Lovable project?
+Para criar o primeiro usuário master (necessário para gerenciar outros usuários):
 
-Yes, you can!
+1. Execute `supabase/create-master-user.sql` no SQL Editor do Supabase
+2. OU execute `supabase/seed.sql` que já inclui o usuário master
+3. Faça login com o email `master@gov.ao`
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+**Veja o arquivo `CRIAR_USUARIO_MASTER.md` para instruções detalhadas.**
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+## 📦 Estrutura do Projeto
+
+```
+src/
+  ├── components/     # Componentes React
+  ├── pages/          # Páginas da aplicação
+  ├── lib/            # Utilitários e serviços
+  │   ├── supabase.ts          # Cliente Supabase
+  │   ├── supabaseService.ts   # Serviços de dados
+  │   ├── pdfUtils.ts          # Utilitários de PDF
+  │   └── pdfStorage.ts        # Gerenciamento de Storage
+  ├── store/          # Estado global (Zustand)
+  └── types.ts        # Tipos TypeScript
+```
+
+## 🗄️ Banco de Dados
+
+Todas as tabelas são criadas automaticamente pelo `schema.sql`:
+
+- `users` - Usuários do sistema
+- `areas` - Áreas/Departamentos
+- `documents` - Documentos
+- `document_actions` - Histórico de ações
+- `document_signatures` - Assinaturas digitais
+- `notifications` - Notificações
+
+## 📄 Armazenamento de PDFs
+
+Os PDFs assinados são armazenados no Supabase Storage no bucket `documents`. O upload é automático quando um documento é assinado.
+
+## 🔧 Desenvolvimento
+
+```bash
+# Desenvolvimento
+npm run dev
+
+# Build
+npm run build
+
+# Preview
+npm run preview
+
+# Testes
+npm test
+```
+
+## 📝 Notas
+
+- O sistema usa autenticação simples por email (sem validação de senha)
+- Para produção, recomenda-se implementar autenticação completa do Supabase Auth
+- Os PDFs originais devem estar na pasta `public/` para serem acessíveis
+- As assinaturas padrão devem estar na pasta `src/assinaturas/` ou no Storage

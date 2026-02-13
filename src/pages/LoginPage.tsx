@@ -1,30 +1,66 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useStore } from '@/store/useStore';
-import { MOCK_USERS } from '@/data/mock';
 import { ROLE_LABELS } from '@/types';
 import { FileText, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import * as supabaseService from '@/lib/supabaseService';
+import { User } from '@/types';
 
 const LoginPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [demoUsers, setDemoUsers] = useState<User[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
   const login = useStore((s) => s.login);
   const currentUser = useStore((s) => s.user);
   const navigate = useNavigate();
 
+  const initialized = useStore((s) => s.initialized);
+  const initializing = useStore((s) => s.initializing);
+
+  // Carregar usuários do banco para exibir na página de login
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        const users = await supabaseService.getUsers();
+        setDemoUsers(users);
+      } catch (error) {
+        console.error('Erro ao carregar usuários:', error);
+      } finally {
+        setLoadingUsers(false);
+      }
+    };
+    loadUsers();
+  }, []);
+
+  // Mostrar loading apenas enquanto verifica sessão inicial
+  // Não bloquear se já inicializou
+  if (!initialized || initializing) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent"></div>
+          <p className="text-muted-foreground">Verificando sessão...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (currentUser) return <Navigate to="/" replace />;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (login(email, password)) {
+    setError('');
+    const success = await login(email, password);
+    if (success) {
       navigate('/');
     } else {
-      setError('Credenciais inválidas. Use um dos emails de demonstração.');
+      setError('Credenciais inválidas. Use um dos emails cadastrados.');
     }
   };
 
@@ -59,21 +95,27 @@ const LoginPage = () => {
               </Button>
             </form>
 
-            <div className="mt-6 border-t pt-4">
-              <p className="mb-3 text-xs font-medium text-muted-foreground">Contas de demonstração:</p>
-              <div className="space-y-2">
-                {MOCK_USERS.map((u) => (
-                  <button
-                    key={u.id}
-                    onClick={() => { setEmail(u.email); setPassword('demo'); }}
-                    className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
-                  >
-                    <span className="font-medium text-foreground">{u.name}</span>
-                    <span className="text-xs text-muted-foreground">{ROLE_LABELS[u.role]}</span>
-                  </button>
-                ))}
+            {demoUsers.length > 0 && (
+              <div className="mt-6 border-t pt-4">
+                <p className="mb-3 text-xs font-medium text-muted-foreground">Usuários cadastrados:</p>
+                {loadingUsers ? (
+                  <p className="text-xs text-muted-foreground">Carregando usuários...</p>
+                ) : (
+                  <div className="space-y-2">
+                    {demoUsers.map((u) => (
+                      <button
+                        key={u.id}
+                        onClick={() => { setEmail(u.email); setPassword('demo'); }}
+                        className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
+                      >
+                        <span className="font-medium text-foreground">{u.name}</span>
+                        <span className="text-xs text-muted-foreground">{ROLE_LABELS[u.role]}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>

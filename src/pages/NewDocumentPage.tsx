@@ -19,16 +19,38 @@ const NewDocumentPage = () => {
   const [type, setType] = useState<DocumentType>('memorando');
   const [description, setDescription] = useState('');
   const [fileName, setFileName] = useState('');
+  const [file, setFile] = useState<File | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) {
       toast({ title: 'Preencha todos os campos obrigatórios', variant: 'destructive' });
       return;
     }
-    createDocument({ title, type, description, fileName: fileName || 'documento.pdf' });
-    toast({ title: 'Documento enviado com sucesso!' });
-    navigate('/meus-documentos');
+    
+    if (!file) {
+      toast({ title: 'Selecione um arquivo PDF', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      await createDocument({ 
+        title, 
+        type, 
+        description, 
+        fileName: fileName || file.name || 'documento.pdf',
+        file 
+      });
+      toast({ title: 'Documento enviado com sucesso!' });
+      navigate('/meus-documentos');
+    } catch (error) {
+      console.error('Erro ao criar documento:', error);
+      toast({ 
+        title: 'Erro ao criar documento', 
+        description: error instanceof Error ? error.message : 'Não foi possível criar o documento',
+        variant: 'destructive' 
+      });
+    }
   };
 
   return (
@@ -63,17 +85,28 @@ const NewDocumentPage = () => {
             </div>
 
             <div className="space-y-2">
-              <Label>Arquivo PDF</Label>
+              <Label>Arquivo PDF *</Label>
               <label className="flex cursor-pointer items-center gap-3 rounded-lg border-2 border-dashed p-4 transition-colors hover:bg-accent">
                 <Upload className="h-5 w-5 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">{fileName || 'Clique para selecionar o arquivo PDF'}</span>
+                <span className="text-sm text-muted-foreground">{file?.name || fileName || 'Clique para selecionar o arquivo PDF'}</span>
                 <input
                   type="file"
                   accept=".pdf"
                   className="hidden"
-                  onChange={(e) => setFileName(e.target.files?.[0]?.name || '')}
+                  onChange={(e) => {
+                    const selectedFile = e.target.files?.[0];
+                    if (selectedFile) {
+                      setFile(selectedFile);
+                      setFileName(selectedFile.name);
+                    }
+                  }}
                 />
               </label>
+              {file && (
+                <p className="text-xs text-muted-foreground">
+                  Arquivo selecionado: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                </p>
+              )}
             </div>
 
             <Button type="submit" className="w-full gap-2">
