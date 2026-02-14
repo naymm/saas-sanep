@@ -68,11 +68,9 @@ const LoginPage = () => {
     <div className="flex min-h-screen items-center justify-center bg-muted p-4">
       <div className="w-full max-w-md animate-fade-in">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary">
-            <FileText className="h-8 w-8 text-primary-foreground" />
+          <div className="mx-auto mb-4 flex items-center justify-center">
+            <img src="/logoWhite.png" alt="Logo" className="h-20 w-auto" />
           </div>
-          <h1 className="text-2xl font-bold text-foreground">DocFlow</h1>
-          <p className="text-muted-foreground">Gestão de Fluxo de Documentos</p>
         </div>
 
         <Card>
