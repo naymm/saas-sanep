@@ -60,6 +60,11 @@ export interface Document {
   updatedAt: string;
   history: DocumentAction[];
   signatures: { userId: string; userName: string; role: UserRole; timestamp: string; signatureUrl?: string }[];
+  // Campos para atribuição de conselho
+  assignedToConselhoUserId?: string; // ID do membro específico do conselho (null se for para todos)
+  assignedToAllConselho?: boolean; // true se deve ser enviado para todos os membros
+  conselhoSignaturesRequired?: number; // Número de assinaturas necessárias
+  conselhoSignaturesReceived?: number; // Número de assinaturas já recebidas
 }
 
 export interface Notification {

@@ -4,6 +4,9 @@ import { STATUS_LABELS, STATUS_STYLE, DOC_TYPE_LABELS, ROLE_LABELS, DEPARTMENT_L
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowLeft, XCircle, Send, FileText, PenTool } from 'lucide-react';
 import { format } from 'date-fns';
 import { useState, useEffect } from 'react';
@@ -25,6 +28,13 @@ const DocumentDetailPage = () => {
   const [signatureUrl, setSignatureUrl] = useState<string>('');
   const [signaturePosition, setSignaturePosition] = useState<{ x: number; y: number; width?: number; height?: number; containerWidth?: number; containerHeight?: number; pdfScale?: number; pdfPageWidth?: number; pdfPageHeight?: number; pageNumber?: number } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  // Estados para seleção de membro(s) do conselho
+  const [conselhoAssignmentType, setConselhoAssignmentType] = useState<'single' | 'all'>('single');
+  const [selectedConselhoUserId, setSelectedConselhoUserId] = useState<string>('');
+  const users = useStore((s) => s.users);
+  
+  // Filtrar apenas membros do conselho
+  const conselhoMembers = users.filter((u) => u.role === 'conselho_admin');
 
   const doc = documents.find((d) => d.id === id);
   if (!doc) {
@@ -40,7 +50,20 @@ const DocumentDetailPage = () => {
   // 1. Documento está pendente_secretaria (novo ou retornado do conselho)
   // 2. Se já foi assinado pelo conselho, pode finalizar
   const canSecretariaAct = user.role === 'secretaria_geral' && doc.status === 'pendente_secretaria';
-  const canConselhoAct = user.role === 'conselho_admin' && doc.status === 'pendente_conselho';
+  
+  // Conselho pode atuar quando:
+  // 1. Documento está pendente_conselho
+  // 2. Se for para membro específico, verificar se é para este membro
+  // 3. Se for para todos, verificar se ainda não assinou
+  const canConselhoAct = user.role === 'conselho_admin' && doc.status === 'pendente_conselho' && (
+    // Se for para todos os membros, verificar se ainda não assinou
+    (doc.assignedToAllConselho && !doc.signatures?.some(sig => sig.role === 'conselho_admin' && sig.userId === user.id)) ||
+    // Se for para membro específico, verificar se é para este membro
+    (doc.assignedToConselhoUserId === user.id) ||
+    // Fallback: se não tem atribuição definida (compatibilidade com documentos antigos)
+    (!doc.assignedToAllConselho && !doc.assignedToConselhoUserId)
+  );
+  
   const canAct = canSecretariaAct || canConselhoAct;
   
   // Verificar se documento já foi assinado pelo conselho
@@ -59,9 +82,28 @@ const DocumentDetailPage = () => {
         setPdfUrlError(null);
         let url: string | undefined;
         
-        if (isConselhoSigning && doc.originalPdfStoragePath) {
-          // Para conselho assinando, usar o PDF original (ainda não assinado)
-          url = await getPdfUrl(doc.originalPdfStoragePath);
+        if (isConselhoSigning) {
+          // Para conselho assinando, verificar se há PDF já assinado (múltiplas assinaturas)
+          // Se há PDF assinado (com "signed_" no nome), usar esse como base para aplicar nova assinatura
+          // Se não há, usar o PDF original (primeira assinatura)
+          const hasSignedPdf = doc.signedPdfStoragePath && supabaseService.isSignedPdfPath(doc.signedPdfStoragePath);
+          const hasSignedOriginal = doc.originalPdfStoragePath && supabaseService.isSignedPdfPath(doc.originalPdfStoragePath);
+          
+          if (hasSignedPdf && doc.signedPdfStoragePath) {
+            // Há PDF já assinado - usar como base (contém assinaturas anteriores)
+            console.log('📄 Conselho assinando - usando PDF já assinado como base:', doc.signedPdfStoragePath);
+            url = await getPdfUrl(doc.signedPdfStoragePath);
+          } else if (hasSignedOriginal && doc.originalPdfStoragePath) {
+            // PDF original foi substituído e agora está assinado
+            console.log('📄 Conselho assinando - usando PDF original (já assinado):', doc.originalPdfStoragePath);
+            url = await getPdfUrl(doc.originalPdfStoragePath);
+          } else if (doc.originalPdfStoragePath) {
+            // Primeira assinatura - usar PDF original
+            console.log('📄 Conselho assinando - usando PDF original (primeira assinatura):', doc.originalPdfStoragePath);
+            url = await getPdfUrl(doc.originalPdfStoragePath);
+          } else {
+            url = '/documento.pdf';
+          }
         } else if (doc.status === 'finalizado') {
           // Documento finalizado: SEMPRE usar o PDF assinado
           // Prioridade: signedPdfUrl > signedPdfStoragePath > originalPdfStoragePath (que foi substituído pelo assinado)
@@ -88,14 +130,34 @@ const DocumentDetailPage = () => {
             setPdfUrlError('PDF assinado não encontrado para documento finalizado');
             console.error('❌ PDF assinado não encontrado para documento finalizado');
           }
-        } else if (doc.originalPdfStoragePath) {
-          // Documento ainda não finalizado: usar originalPdfStoragePath
-          url = await getPdfUrl(doc.originalPdfStoragePath);
-        } else if (doc.signedPdfUrl) {
-          // Fallback: usar signedPdfUrl se disponível
-          url = await getPdfUrl(doc.signedPdfUrl);
         } else {
-          url = '/documento.pdf'; // Fallback para demo
+          // Documento ainda não finalizado: verificar se há PDF assinado
+          // Prioridade: signedPdfStoragePath (se contém "signed_") > originalPdfStoragePath
+          const hasSignedPdf = doc.signedPdfStoragePath && supabaseService.isSignedPdfPath(doc.signedPdfStoragePath);
+          const hasSignedOriginal = doc.originalPdfStoragePath && supabaseService.isSignedPdfPath(doc.originalPdfStoragePath);
+          
+          if (hasSignedPdf && doc.signedPdfStoragePath) {
+            // Há PDF assinado - usar esse (contém assinaturas anteriores)
+            console.log('📄 Documento em tramitação - usando PDF assinado:', doc.signedPdfStoragePath);
+            url = await getPdfUrl(doc.signedPdfStoragePath);
+          } else if (hasSignedOriginal && doc.originalPdfStoragePath) {
+            // PDF original foi substituído e agora está assinado
+            console.log('📄 Documento em tramitação - usando PDF original (já assinado):', doc.originalPdfStoragePath);
+            url = await getPdfUrl(doc.originalPdfStoragePath);
+          } else if (doc.signedPdfStoragePath) {
+            // Usar signedPdfStoragePath mesmo que não tenha "signed_" (compatibilidade)
+            console.log('📄 Documento em tramitação - usando signedPdfStoragePath:', doc.signedPdfStoragePath);
+            url = await getPdfUrl(doc.signedPdfStoragePath);
+          } else if (doc.originalPdfStoragePath) {
+            // Usar PDF original
+            console.log('📄 Documento em tramitação - usando PDF original:', doc.originalPdfStoragePath);
+            url = await getPdfUrl(doc.originalPdfStoragePath);
+          } else if (doc.signedPdfUrl) {
+            // Fallback: usar signedPdfUrl se disponível
+            url = await getPdfUrl(doc.signedPdfUrl);
+          } else {
+            url = '/documento.pdf'; // Fallback para demo
+          }
         }
         
         if (url) {
@@ -121,14 +183,41 @@ const DocumentDetailPage = () => {
       if (hasConselhoSignature) {
         action = 'Documento finalizado';
       } else {
-        action = 'Encaminhado para Conselho de Administração';
+        // Validar seleção de membro(s) do conselho
+        if (conselhoAssignmentType === 'single' && !selectedConselhoUserId) {
+          toast({ 
+            title: 'Selecione um membro do conselho', 
+            variant: 'destructive' 
+          });
+          return;
+        }
+        if (conselhoAssignmentType === 'all' && conselhoMembers.length === 0) {
+          toast({ 
+            title: 'Nenhum membro do conselho encontrado', 
+            variant: 'destructive' 
+          });
+          return;
+        }
+        action = conselhoAssignmentType === 'all' 
+          ? 'Encaminhado para todos os membros do Conselho de Administração'
+          : 'Encaminhado para Conselho de Administração';
       }
       
       try {
         setIsProcessing(true);
-        await advanceDocument(doc.id, action, comment || undefined);
+        await advanceDocument(
+          doc.id, 
+          action, 
+          comment || undefined,
+          undefined, // signatureUrl
+          undefined, // signedPdfUrl
+          conselhoAssignmentType === 'single' ? selectedConselhoUserId : undefined,
+          conselhoAssignmentType === 'all'
+        );
         toast({ title: 'Ação realizada com sucesso!' });
         setComment('');
+        setSelectedConselhoUserId('');
+        setConselhoAssignmentType('single');
       } catch (error: any) {
         console.error('Erro ao encaminhar documento:', error);
         toast({ 
@@ -161,13 +250,40 @@ const DocumentDetailPage = () => {
           throw new Error('A biblioteca pdf-lib não está instalada. Execute: npm install');
         }
 
-        // Carregar o PDF original do Storage (sempre usar o original, não o assinado se existir)
+        // Carregar o PDF base para aplicar a nova assinatura
+        // IMPORTANTE: Usar nomenclatura para identificar PDFs assinados (contém "signed_" no nome)
+        // Isso é mais confiável que verificar assinaturas no banco
         let pdfBytes: Uint8Array;
-        if (doc.originalPdfStoragePath) {
-          // Baixar o PDF original do Storage usando a função do supabaseService
+        
+        // Verificar se há PDF já assinado usando nomenclatura (contém "signed_" no nome)
+        const hasSignedPdfPath = doc.signedPdfStoragePath && supabaseService.isSignedPdfPath(doc.signedPdfStoragePath);
+        const hasSignedOriginalPath = doc.originalPdfStoragePath && supabaseService.isSignedPdfPath(doc.originalPdfStoragePath);
+        
+        console.log('🔍 Verificando PDF base para assinatura:', {
+          hasSignedPdfPath,
+          hasSignedOriginalPath,
+          signedPdfStoragePath: doc.signedPdfStoragePath,
+          originalPdfStoragePath: doc.originalPdfStoragePath,
+          isSignedPdfPath: doc.signedPdfStoragePath ? supabaseService.isSignedPdfPath(doc.signedPdfStoragePath) : false,
+          isSignedOriginalPath: doc.originalPdfStoragePath ? supabaseService.isSignedPdfPath(doc.originalPdfStoragePath) : false,
+        });
+        
+        // Se há PDF já assinado (identificado pelo nome), usar esse como base
+        if (hasSignedPdfPath && doc.signedPdfStoragePath) {
+          // PDF já assinado existe - usar como base para preservar assinaturas anteriores
+          console.log('📄 Usando PDF já assinado como base (preservando assinaturas anteriores):', doc.signedPdfStoragePath);
+          pdfBytes = await supabaseService.downloadSignedPdf(doc.signedPdfStoragePath);
+        } else if (hasSignedOriginalPath && doc.originalPdfStoragePath) {
+          // PDF original foi substituído e agora está assinado - usar como base
+          console.log('📄 Usando PDF original (já assinado) como base:', doc.originalPdfStoragePath);
+          pdfBytes = await supabaseService.downloadSignedPdf(doc.originalPdfStoragePath);
+        } else if (doc.originalPdfStoragePath) {
+          // Primeira assinatura - usar PDF original
+          console.log('📄 Usando PDF original (primeira assinatura):', doc.originalPdfStoragePath);
           pdfBytes = await supabaseService.downloadSignedPdf(doc.originalPdfStoragePath);
         } else {
           // Fallback: usar PDF de demonstração
+          console.log('⚠️ Nenhum PDF encontrado, usando fallback');
           pdfBytes = await fetchPdfAsBytes('/documento.pdf');
         }
         
@@ -660,6 +776,72 @@ const DocumentDetailPage = () => {
                 )}
               </div>
             ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Seleção de membro(s) do conselho - apenas para secretaria quando vai encaminhar */}
+      {canSecretariaAct && !hasConselhoSignature && conselhoMembers.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Direcionar para Conselho de Administração</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-3">
+              <Label>Selecione o destino do documento:</Label>
+              <RadioGroup
+                value={conselhoAssignmentType}
+                onValueChange={(value) => {
+                  setConselhoAssignmentType(value as 'single' | 'all');
+                  if (value === 'all') {
+                    setSelectedConselhoUserId('');
+                  }
+                }}
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="single" id="single" />
+                  <Label htmlFor="single" className="font-normal cursor-pointer">
+                    Um membro específico do conselho
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="all" id="all" />
+                  <Label htmlFor="all" className="font-normal cursor-pointer">
+                    Todos os membros do conselho (para pareceres)
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+            
+            {conselhoAssignmentType === 'single' && (
+              <div className="space-y-2">
+                <Label htmlFor="conselho-member">Selecione o membro:</Label>
+                <Select
+                  value={selectedConselhoUserId}
+                  onValueChange={setSelectedConselhoUserId}
+                >
+                  <SelectTrigger id="conselho-member">
+                    <SelectValue placeholder="Selecione um membro do conselho" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {conselhoMembers.map((member) => (
+                      <SelectItem key={member.id} value={member.id}>
+                        {member.name} {member.email && `(${member.email})`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            
+            {conselhoAssignmentType === 'all' && (
+              <div className="rounded-lg bg-muted p-3 text-sm">
+                <p className="text-muted-foreground">
+                  O documento será enviado para todos os {conselhoMembers.length} membro(s) do conselho.
+                  O primeiro que assinar encaminhará para o próximo, e após todos assinarem, o documento será finalizado automaticamente.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

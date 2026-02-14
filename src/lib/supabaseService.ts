@@ -570,6 +570,10 @@ export async function updateDocument(id: string, updates: {
   signedPdfUrl?: string;
   signedPdfStoragePath?: string;
   originalPdfStoragePath?: string;
+  assignedToConselhoUserId?: string | null;
+  assignedToAllConselho?: boolean;
+  conselhoSignaturesRequired?: number;
+  conselhoSignaturesReceived?: number;
 }): Promise<Document> {
   console.log('🔵 updateDocument chamado:', { id, updates });
   
@@ -629,6 +633,25 @@ export async function updateDocument(id: string, updates: {
       // Valor inválido, não incluir
       console.warn('⚠️ originalPdfStoragePath tem valor inválido, não incluindo no update');
     }
+  }
+
+  // 7. Adicionar campos de atribuição de conselho
+  if (updates.assignedToConselhoUserId !== undefined) {
+    updateData.assigned_to_conselho_user_id = (updates.assignedToConselhoUserId && updates.assignedToConselhoUserId.trim() !== '') 
+      ? updates.assignedToConselhoUserId 
+      : null;
+  }
+  
+  if (updates.assignedToAllConselho !== undefined) {
+    updateData.assigned_to_all_conselho = Boolean(updates.assignedToAllConselho);
+  }
+  
+  if (updates.conselhoSignaturesRequired !== undefined) {
+    updateData.conselho_signatures_required = Math.max(1, Math.floor(updates.conselhoSignaturesRequired));
+  }
+  
+  if (updates.conselhoSignaturesReceived !== undefined) {
+    updateData.conselho_signatures_received = Math.max(0, Math.floor(updates.conselhoSignaturesReceived));
   }
 
   // 7. Garantir que há pelo menos um campo para atualizar
@@ -852,6 +875,11 @@ function mapDocumentFromDb(dbDoc: any): Omit<Document, 'history' | 'signatures'>
     status: dbDoc.status,
     createdAt: dbDoc.created_at,
     updatedAt: dbDoc.updated_at,
+    // Campos para atribuição de conselho
+    assignedToConselhoUserId: dbDoc.assigned_to_conselho_user_id || undefined,
+    assignedToAllConselho: dbDoc.assigned_to_all_conselho || false,
+    conselhoSignaturesRequired: dbDoc.conselho_signatures_required || 1,
+    conselhoSignaturesReceived: dbDoc.conselho_signatures_received || 0,
   };
 }
 
@@ -881,6 +909,8 @@ function mapSignatureFromDb(dbSignature: any) {
 // ==================== NOTIFICATIONS ====================
 
 export async function getNotifications(userId: string): Promise<Notification[]> {
+  console.log('🔔 Buscando notificações para usuário:', userId);
+
   const { data, error } = await supabase
     .from('notifications')
     .select('*')
@@ -888,10 +918,18 @@ export async function getNotifications(userId: string): Promise<Notification[]> 
     .order('timestamp', { ascending: false });
 
   if (error) {
-    console.error('Erro ao buscar notificações:', error);
+    console.error('❌ Erro ao buscar notificações:', {
+      error,
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      userId,
+    });
     throw error;
   }
 
+  console.log('✅ Notificações encontradas:', (data || []).length);
   return (data || []).map(mapNotificationFromDb);
 }
 
@@ -900,6 +938,12 @@ export async function createNotification(notification: {
   message: string;
   documentId: string;
 }): Promise<Notification> {
+  console.log('📢 Criando notificação:', {
+    userId: notification.userId,
+    message: notification.message,
+    documentId: notification.documentId,
+  });
+
   const { data, error } = await supabase
     .from('notifications')
     .insert({
@@ -912,10 +956,19 @@ export async function createNotification(notification: {
     .single();
 
   if (error) {
-    console.error('Erro ao criar notificação:', error);
+    console.error('❌ Erro ao criar notificação:', {
+      error,
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      userId: notification.userId,
+      documentId: notification.documentId,
+    });
     throw error;
   }
 
+  console.log('✅ Notificação criada com sucesso:', data.id);
   return mapNotificationFromDb(data);
 }
 
@@ -982,9 +1035,11 @@ export async function uploadOriginalPdf(
 
 /**
  * Faz upload de um PDF assinado para o Supabase Storage
+ * IMPORTANTE: Usa nomenclatura especial para identificar PDFs assinados
+ * Formato: {docId}/signed_{fileName} ou {docId}/signed_{timestamp}.pdf
  * @param documentId - ID do documento
  * @param pdfBytes - Bytes do PDF
- * @param fileName - Nome do arquivo (opcional)
+ * @param fileName - Nome do arquivo original (opcional, será usado para gerar o nome assinado)
  * @returns Caminho do arquivo no Storage
  */
 export async function uploadSignedPdf(
@@ -992,7 +1047,22 @@ export async function uploadSignedPdf(
   pdfBytes: Uint8Array,
   fileName?: string
 ): Promise<string> {
-  const filePath = `${documentId}/${fileName || `signed_${Date.now()}.pdf`}`;
+  // Gerar nome do arquivo assinado com prefixo "signed_"
+  let signedFileName: string;
+  if (fileName) {
+    // Se o nome já contém "signed_", manter; senão, adicionar prefixo
+    if (fileName.includes('signed_')) {
+      signedFileName = fileName;
+    } else {
+      // Extrair apenas o nome do arquivo (sem caminho) e adicionar prefixo
+      const baseName = fileName.split('/').pop() || fileName;
+      signedFileName = `signed_${baseName}`;
+    }
+  } else {
+    signedFileName = `signed_${Date.now()}.pdf`;
+  }
+  
+  const filePath = `${documentId}/${signedFileName}`;
 
   const { data, error } = await supabase.storage
     .from(STORAGE_BUCKET)
@@ -1010,41 +1080,74 @@ export async function uploadSignedPdf(
     throw error;
   }
 
-  console.log('PDF assinado enviado com sucesso:', filePath);
+  console.log('✅ PDF assinado enviado com sucesso:', filePath);
   return filePath;
 }
 
 /**
- * Substitui um PDF original no Storage pelo PDF assinado
- * @param existingPath - Caminho do PDF original no Storage
+ * Verifica se um caminho de PDF indica que o arquivo já está assinado
+ * @param filePath - Caminho do arquivo no Storage
+ * @returns true se o arquivo está assinado (contém "signed_" no nome)
+ */
+export function isSignedPdfPath(filePath: string): boolean {
+  if (!filePath) return false;
+  const fileName = filePath.split('/').pop() || '';
+  return fileName.includes('signed_');
+}
+
+/**
+ * Substitui um PDF no Storage (original ou já assinado)
+ * IMPORTANTE: Se o caminho não contém "signed_", cria um novo arquivo com prefixo "signed_"
+ * para preservar o PDF original e identificar claramente que está assinado
+ * @param existingPath - Caminho do PDF no Storage
  * @param pdfBytes - Bytes do PDF assinado
- * @returns Caminho do arquivo no Storage (mesmo caminho)
+ * @returns Caminho do arquivo no Storage (pode ser diferente se criar novo arquivo assinado)
  */
 export async function replaceOriginalPdf(
   existingPath: string,
   pdfBytes: Uint8Array
 ): Promise<string> {
-  console.log('🔄 Substituindo PDF original:', existingPath);
+  console.log('🔄 Substituindo PDF:', existingPath);
+
+  // Se o caminho já indica que está assinado, substituir no mesmo caminho
+  if (isSignedPdfPath(existingPath)) {
+    const { data, error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .update(existingPath, pdfBytes, {
+        contentType: 'application/pdf',
+        upsert: true,
+      });
+
+    if (error) {
+      console.error('❌ Erro ao substituir PDF assinado:', error);
+      throw error;
+    }
+
+    console.log('✅ PDF assinado substituído com sucesso:', existingPath);
+    return existingPath;
+  }
+
+  // Se é PDF original, criar novo arquivo assinado (preservando o original)
+  const pathParts = existingPath.split('/');
+  const documentId = pathParts[0];
+  const originalFileName = pathParts.slice(1).join('/');
+  const signedFileName = `signed_${originalFileName}`;
+  const signedPath = `${documentId}/${signedFileName}`;
 
   const { data, error } = await supabase.storage
     .from(STORAGE_BUCKET)
-    .update(existingPath, pdfBytes, {
+    .upload(signedPath, pdfBytes, {
       contentType: 'application/pdf',
-      upsert: true, // Garantir que substitui se existir
+      upsert: true,
     });
 
   if (error) {
-    console.error('❌ Erro ao substituir PDF original:', error);
-    console.error('Detalhes do erro:', {
-      message: error.message,
-      statusCode: (error as any).statusCode,
-      path: existingPath,
-    });
+    console.error('❌ Erro ao criar PDF assinado:', error);
     throw error;
   }
 
-  console.log('✅ PDF original substituído com sucesso:', existingPath);
-  return existingPath;
+  console.log('✅ PDF assinado criado (preservando original):', signedPath);
+  return signedPath;
 }
 
 /**

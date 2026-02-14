@@ -15,7 +15,28 @@ const MyDocumentsPage = () => {
 
   const pending = documents.filter((d) => {
     if (user.role === 'secretaria_geral') return d.status === 'pendente_secretaria';
-    if (user.role === 'conselho_admin') return d.status === 'pendente_conselho';
+    if (user.role === 'conselho_admin') {
+      // Verificar se o documento está pendente para o conselho
+      if (d.status !== 'pendente_conselho') return false;
+      
+      // Se for para todos os membros, verificar se este membro já assinou
+      if (d.assignedToAllConselho) {
+        // Verificar se já assinou
+        const hasUserSigned = d.signatures && d.signatures.some(sig => 
+          sig.role === 'conselho_admin' && sig.userId === user.id
+        );
+        // Mostrar apenas se ainda não assinou
+        return !hasUserSigned;
+      }
+      
+      // Se for para membro específico, verificar se é para este membro
+      if (d.assignedToConselhoUserId) {
+        return d.assignedToConselhoUserId === user.id;
+      }
+      
+      // Fallback: se não tem atribuição definida, mostrar para todos (compatibilidade com documentos antigos)
+      return true;
+    }
     return false;
   });
 
