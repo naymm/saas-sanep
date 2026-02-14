@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { User, Document, Notification, DocumentStatus, DocumentType, Department, Area, UserRole } from '@/types';
+import { User, Document, Notification, DocumentStatus, DocumentType, Department, Area, Company, CompanyStamp, UserRole } from '@/types';
 import * as supabaseService from '@/lib/supabaseService';
 
 interface AppState {
@@ -8,6 +8,8 @@ interface AppState {
   notifications: Notification[];
   users: User[];
   areas: Area[];
+  companies: Company[];
+  companyStamps: CompanyStamp[]; // Carimbos gerais por empresa
   loading: boolean;
   error: string | null;
   initialized: boolean; // Flag para indicar se a sessão foi verificada
@@ -18,7 +20,7 @@ interface AppState {
   initializeSession: () => Promise<void>; // Função para verificar sessão existente
   loadData: () => Promise<void>;
   createDocument: (data: { title: string; type: DocumentType; description: string; fileName: string; file?: File; assignedToConselhoUserId?: string; assignedToAllConselho?: boolean }) => Promise<void>;
-  advanceDocument: (docId: string, action: string, comment?: string, signatureUrl?: string, signedPdfUrl?: string, assignedToConselhoUserId?: string, assignedToAllConselho?: boolean) => Promise<void>;
+  advanceDocument: (docId: string, action: string, comment?: string, signatureUrl?: string, signedPdfUrl?: string, assignedToConselhoUserId?: string, assignedToAllConselho?: boolean, stampUrl?: string) => Promise<void>;
   rejectDocument: (docId: string, justification: string) => Promise<void>;
   markNotificationRead: (notifId: string) => Promise<void>;
   updateSignature: (url: string) => Promise<void>;
@@ -30,6 +32,14 @@ interface AppState {
   createArea: (data: { name: string; code: string; description?: string }) => Promise<void>;
   updateArea: (areaId: string, data: Partial<Omit<Area, 'id' | 'createdAt'>>) => Promise<void>;
   deleteArea: (areaId: string) => Promise<void>;
+  // Company management functions
+  createCompany: (data: { name: string; code: string; description?: string }) => Promise<void>;
+  updateCompany: (companyId: string, data: Partial<Omit<Company, 'id' | 'createdAt'>>) => Promise<void>;
+  deleteCompany: (companyId: string) => Promise<void>;
+  // Company stamp management functions (apenas master)
+  createCompanyStamp: (data: { companyId: string; title: string; stampUrl: string }) => Promise<void>;
+  updateCompanyStamp: (stampId: string, data: Partial<Omit<CompanyStamp, 'id' | 'createdAt'>>) => Promise<void>;
+  deleteCompanyStamp: (stampId: string) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -38,6 +48,8 @@ export const useStore = create<AppState>((set, get) => ({
   notifications: [],
   users: [],
   areas: [],
+  companies: [],
+  companyStamps: [],
   loading: false,
   error: null,
   initialized: false,
@@ -95,6 +107,8 @@ export const useStore = create<AppState>((set, get) => ({
         notifications: [], 
         users: [], 
         areas: [],
+        companies: [],
+        companyStamps: [],
         initialized: true, // Manter inicializado para evitar loops
         initializing: false
       });
@@ -220,9 +234,11 @@ export const useStore = create<AppState>((set, get) => ({
         supabaseService.getDocuments(),
         supabaseService.getUsers(),
         supabaseService.getAreas(),
+        supabaseService.getCompanies(),
+        supabaseService.getCompanyStamps(),
       ]);
 
-      const [documents, users, areas] = await Promise.race([dataPromise, timeoutPromise]) as [Document[], User[], Area[]];
+      const [documents, users, areas, companies, companyStamps] = await Promise.race([dataPromise, timeoutPromise]) as [Document[], User[], Area[], Company[], CompanyStamp[]];
 
       let notifications: Notification[] = [];
       if (user) {
@@ -234,7 +250,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
 
-      set({ documents, users, areas, notifications, loading: false });
+      set({ documents, users, areas, companies, companyStamps, notifications, loading: false });
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
       set({ error: error instanceof Error ? error.message : 'Erro ao carregar dados', loading: false });
@@ -1466,6 +1482,110 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (error) {
       console.error('Erro ao deletar área:', error);
       set({ error: 'Erro ao deletar área', loading: false });
+    }
+  },
+
+  // ==================== COMPANY MANAGEMENT ====================
+  createCompany: async (data) => {
+    try {
+      const user = get().user;
+      if (!user || user.role !== 'master') {
+        throw new Error('Apenas usuários master podem criar empresas');
+      }
+
+      set({ loading: true, error: null });
+      await supabaseService.createCompany(data);
+      await get().loadData();
+      set({ loading: false });
+    } catch (error) {
+      console.error('Erro ao criar empresa:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Erro ao criar empresa';
+      set({ error: errorMessage, loading: false });
+      throw error;
+    }
+  },
+
+  updateCompany: async (companyId, data) => {
+    try {
+      const user = get().user;
+      if (!user || user.role !== 'master') return;
+
+      set({ loading: true, error: null });
+      await supabaseService.updateCompany(companyId, data);
+      await get().loadData();
+      set({ loading: false });
+    } catch (error) {
+      console.error('Erro ao atualizar empresa:', error);
+      set({ error: 'Erro ao atualizar empresa', loading: false });
+    }
+  },
+
+  deleteCompany: async (companyId) => {
+    try {
+      const user = get().user;
+      if (!user || user.role !== 'master') return;
+
+      set({ loading: true, error: null });
+      await supabaseService.deleteCompany(companyId);
+      await get().loadData();
+      set({ loading: false });
+    } catch (error) {
+      console.error('Erro ao deletar empresa:', error);
+      set({ error: 'Erro ao deletar empresa', loading: false });
+    }
+  },
+
+  // ==================== COMPANY STAMP MANAGEMENT ====================
+  createCompanyStamp: async (data) => {
+    try {
+      const user = get().user;
+      if (!user || user.role !== 'master') {
+        throw new Error('Apenas usuários master podem cadastrar carimbos');
+      }
+
+      set({ loading: true, error: null });
+      await supabaseService.createCompanyStamp({
+        companyId: data.companyId,
+        title: data.title,
+        stampUrl: data.stampUrl,
+      });
+      await get().loadData(); // Recarregar todos os dados
+      set({ loading: false });
+    } catch (error) {
+      console.error('Erro ao criar carimbo:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Erro ao criar carimbo';
+      set({ error: errorMessage, loading: false });
+      throw error;
+    }
+  },
+
+  updateCompanyStamp: async (stampId, data) => {
+    try {
+      const user = get().user;
+      if (!user || user.role !== 'master') return;
+
+      set({ loading: true, error: null });
+      await supabaseService.updateCompanyStamp(stampId, data);
+      await get().loadData(); // Recarregar todos os dados
+      set({ loading: false });
+    } catch (error) {
+      console.error('Erro ao atualizar carimbo:', error);
+      set({ error: 'Erro ao atualizar carimbo', loading: false });
+    }
+  },
+
+  deleteCompanyStamp: async (stampId) => {
+    try {
+      const user = get().user;
+      if (!user || user.role !== 'master') return;
+
+      set({ loading: true, error: null });
+      await supabaseService.deleteCompanyStamp(stampId);
+      await get().loadData(); // Recarregar todos os dados
+      set({ loading: false });
+    } catch (error) {
+      console.error('Erro ao deletar carimbo:', error);
+      set({ error: 'Erro ao deletar carimbo', loading: false });
     }
   },
 }));

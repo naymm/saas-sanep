@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useStore } from '@/store/useStore';
 import { ROLE_LABELS, DEPARTMENT_LABELS } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,12 +6,40 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Upload, PenTool, Stamp, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import * as supabaseService from '@/lib/supabaseService';
 
 const ProfilePage = () => {
   const user = useStore((s) => s.user)!;
+  const companyStamps = useStore((s) => s.companyStamps);
   const updateSignature = useStore((s) => s.updateSignature);
   const updateStamp = useStore((s) => s.updateStamp);
   const { toast } = useToast();
+  
+  const [stampUrls, setStampUrls] = useState<Record<string, string>>({});
+  
+  // Resolver URLs dos carimbos gerais por empresa
+  useEffect(() => {
+    const resolveStampUrls = async () => {
+      const urls: Record<string, string> = {};
+      for (const stamp of companyStamps) {
+        if (stamp.stampUrl.startsWith('http') || stamp.stampUrl.startsWith('data:') || stamp.stampUrl.startsWith('blob:')) {
+          urls[stamp.id] = stamp.stampUrl;
+        } else {
+          try {
+            urls[stamp.id] = await supabaseService.getSignatureOrStampUrl(stamp.stampUrl);
+          } catch (error) {
+            console.error('Erro ao resolver URL do carimbo:', error);
+            urls[stamp.id] = stamp.stampUrl;
+          }
+        }
+      }
+      setStampUrls(urls);
+    };
+    
+    if (companyStamps.length > 0) {
+      resolveStampUrls();
+    }
+  }, [companyStamps]);
 
   const handleFileUpload = (type: 'signature' | 'stamp') => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -91,28 +119,65 @@ const ProfilePage = () => {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Stamp className="h-4 w-4" /> Carimbo Digital</CardTitle></CardHeader>
-        <CardContent className="space-y-4">
-          {user.stampUrl ? (
-            <div className="flex items-center gap-4">
-              <div className="rounded-lg border bg-accent p-4">
-                <img src={user.stampUrl} alt="Carimbo" className="h-16 object-contain" />
+      {/* Carimbos - Gerais por empresa (todos os membros do conselho veem os mesmos carimbos) */}
+      {user.role === 'conselho_admin' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Stamp className="h-4 w-4" /> Carimbos por Empresa
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {companyStamps.length > 0 ? (
+              <div className="space-y-3">
+                {companyStamps.map((stamp) => (
+                  <div key={stamp.id} className="flex items-center justify-between rounded-lg border p-3">
+                    <div className="flex items-center gap-4">
+                      <div className="rounded-lg border bg-accent p-2">
+                        <img 
+                          src={stampUrls[stamp.id] || stamp.stampUrl} 
+                          alt={`Carimbo ${stamp.company?.name || 'Empresa'}`} 
+                          className="h-12 object-contain" 
+                        />
+                      </div>
+                      <div>
+                        <p className="font-medium">{stamp.title}</p>
+                        <p className="text-xs text-muted-foreground">{stamp.company?.name || 'Empresa'} ({stamp.company?.code || ''})</p>
+                        <p className="text-xs text-muted-foreground mt-1">Carimbo geral - visível para todos os membros do conselho</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <Button variant="outline" size="sm" onClick={() => updateStamp('')} className="gap-1">
-                <Trash2 className="h-3 w-3" /> Remover
-              </Button>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Nenhum carimbo cadastrado.</p>
-          )}
-          <label className="flex cursor-pointer items-center gap-3 rounded-lg border-2 border-dashed p-4 transition-colors hover:bg-accent">
-            <Upload className="h-5 w-5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Fazer upload do carimbo (PNG com fundo transparente)</span>
-            <input type="file" accept="image/png" className="hidden" onChange={handleFileUpload('stamp')} />
-          </label>
-        </CardContent>
-      </Card>
+            ) : (
+              <p className="text-sm text-muted-foreground">Nenhum carimbo cadastrado. Entre em contato com o administrador para cadastrar carimbos.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Stamp className="h-4 w-4" /> Carimbo Digital</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            {user.stampUrl ? (
+              <div className="flex items-center gap-4">
+                <div className="rounded-lg border bg-accent p-4">
+                  <img src={user.stampUrl} alt="Carimbo" className="h-16 object-contain" />
+                </div>
+                <Button variant="outline" size="sm" onClick={() => updateStamp('')} className="gap-1">
+                  <Trash2 className="h-3 w-3" /> Remover
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Nenhum carimbo cadastrado.</p>
+            )}
+            <label className="flex cursor-pointer items-center gap-3 rounded-lg border-2 border-dashed p-4 transition-colors hover:bg-accent">
+              <Upload className="h-5 w-5 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Fazer upload do carimbo (PNG com fundo transparente)</span>
+              <input type="file" accept="image/png" className="hidden" onChange={handleFileUpload('stamp')} />
+            </label>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };

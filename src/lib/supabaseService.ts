@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { User, Document, Notification, Area, DocumentStatus, DocumentType, UserRole, Department } from '@/types';
+import { User, Document, Notification, Area, Company, CompanyStamp, DocumentStatus, DocumentType, UserRole, Department } from '@/types';
 
 // ==================== AUTHENTICATION ====================
 
@@ -413,6 +413,199 @@ function mapAreaFromDb(dbArea: any): Area {
     description: dbArea.description || undefined,
     createdAt: dbArea.created_at,
     updatedAt: dbArea.updated_at,
+  };
+}
+
+// ==================== COMPANIES ====================
+
+export async function getCompanies(): Promise<Company[]> {
+  const { data, error } = await supabase
+    .from('companies')
+    .select('*')
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error('Erro ao buscar empresas:', error);
+    throw error;
+  }
+
+  return (data || []).map(mapCompanyFromDb);
+}
+
+export async function createCompany(company: { name: string; code: string; description?: string }): Promise<Company> {
+  const { data, error } = await supabase
+    .from('companies')
+    .insert({
+      name: company.name,
+      code: company.code,
+      description: company.description || null,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Erro ao criar empresa:', error);
+    throw error;
+  }
+
+  return mapCompanyFromDb(data);
+}
+
+export async function updateCompany(id: string, updates: Partial<Omit<Company, 'id' | 'createdAt'>>): Promise<Company> {
+  const updateData: any = {};
+  if (updates.name !== undefined) updateData.name = updates.name;
+  if (updates.code !== undefined) updateData.code = updates.code;
+  if (updates.description !== undefined) updateData.description = updates.description || null;
+
+  const { data, error } = await supabase
+    .from('companies')
+    .update(updateData)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Erro ao atualizar empresa:', error);
+    throw error;
+  }
+
+  return mapCompanyFromDb(data);
+}
+
+export async function deleteCompany(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('companies')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Erro ao deletar empresa:', error);
+    throw error;
+  }
+}
+
+function mapCompanyFromDb(dbCompany: any): Company {
+  return {
+    id: dbCompany.id,
+    name: dbCompany.name,
+    code: dbCompany.code,
+    description: dbCompany.description || undefined,
+    createdAt: dbCompany.created_at,
+    updatedAt: dbCompany.updated_at,
+  };
+}
+
+// ==================== COMPANY STAMPS (Carimbos Gerais por Empresa) ====================
+
+/**
+ * Busca todos os carimbos de todas as empresas (gerais - todos os membros do conselho veem)
+ */
+export async function getCompanyStamps(): Promise<CompanyStamp[]> {
+  const { data, error } = await supabase
+    .from('company_stamps')
+    .select(`
+      *,
+      companies (*)
+    `)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Erro ao buscar carimbos das empresas:', error);
+    throw error;
+  }
+
+  return (data || []).map(mapCompanyStampFromDb);
+}
+
+/**
+ * Busca carimbo de uma empresa específica
+ */
+export async function getCompanyStampByCompany(companyId: string): Promise<CompanyStamp | null> {
+  const { data, error } = await supabase
+    .from('company_stamps')
+    .select(`
+      *,
+      companies (*)
+    `)
+    .eq('company_id', companyId)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null; // Não encontrado
+    console.error('Erro ao buscar carimbo da empresa:', error);
+    throw error;
+  }
+
+  return mapCompanyStampFromDb(data);
+}
+
+export async function createCompanyStamp(stamp: { companyId: string; title: string; stampUrl: string }): Promise<CompanyStamp> {
+  const { data, error } = await supabase
+    .from('company_stamps')
+    .insert({
+      company_id: stamp.companyId,
+      title: stamp.title,
+      stamp_url: stamp.stampUrl,
+    })
+    .select(`
+      *,
+      companies (*)
+    `)
+    .single();
+
+  if (error) {
+    console.error('Erro ao criar carimbo:', error);
+    throw error;
+  }
+
+  return mapCompanyStampFromDb(data);
+}
+
+export async function updateCompanyStamp(id: string, updates: Partial<Omit<CompanyStamp, 'id' | 'createdAt'>>): Promise<CompanyStamp> {
+  const updateData: any = {};
+  if (updates.companyId !== undefined) updateData.company_id = updates.companyId;
+  if (updates.title !== undefined) updateData.title = updates.title;
+  if (updates.stampUrl !== undefined) updateData.stamp_url = updates.stampUrl;
+
+  const { data, error } = await supabase
+    .from('company_stamps')
+    .update(updateData)
+    .eq('id', id)
+    .select(`
+      *,
+      companies (*)
+    `)
+    .single();
+
+  if (error) {
+    console.error('Erro ao atualizar carimbo:', error);
+    throw error;
+  }
+
+  return mapCompanyStampFromDb(data);
+}
+
+export async function deleteCompanyStamp(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('company_stamps')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Erro ao deletar carimbo:', error);
+    throw error;
+  }
+}
+
+function mapCompanyStampFromDb(dbStamp: any): CompanyStamp {
+  return {
+    id: dbStamp.id,
+    companyId: dbStamp.company_id,
+    company: dbStamp.companies ? mapCompanyFromDb(dbStamp.companies) : undefined,
+    title: dbStamp.title || 'Carimbo',
+    stampUrl: dbStamp.stamp_url,
+    createdAt: dbStamp.created_at,
+    updatedAt: dbStamp.updated_at,
   };
 }
 
@@ -1002,6 +1195,37 @@ const SIGNATURES_FOLDER = 'signatures';
 const STAMPS_FOLDER = 'stamps';
 
 /**
+ * Sanitiza um nome de arquivo para ser válido no Supabase Storage
+ * Remove caracteres especiais, espaços e acentos
+ */
+function sanitizeFileName(fileName: string): string {
+  // Remover extensão temporariamente
+  const parts = fileName.split('.');
+  const extension = parts.length > 1 ? parts.pop() : '';
+  const nameWithoutExt = parts.join('.');
+  
+  // Normalizar e remover acentos
+  const normalized = nameWithoutExt
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove diacríticos
+    .toLowerCase();
+  
+  // Substituir espaços e caracteres especiais por underscore
+  const sanitized = normalized
+    .replace(/[^a-z0-9_-]/g, '_') // Mantém apenas letras, números, underscore e hífen
+    .replace(/_{2,}/g, '_') // Remove underscores múltiplos
+    .replace(/^_+|_+$/g, ''); // Remove underscores no início e fim
+  
+  // Se ficou vazio, usar nome padrão
+  const finalName = sanitized || 'carimbo';
+  
+  // Adicionar timestamp para garantir unicidade
+  const timestamp = Date.now();
+  
+  return extension ? `${finalName}_${timestamp}.${extension}` : `${finalName}_${timestamp}`;
+}
+
+/**
  * Faz upload de um PDF original para o Supabase Storage
  * @param documentId - ID do documento
  * @param file - Arquivo PDF (File object)
@@ -1198,8 +1422,18 @@ export async function uploadSignature(userId: string, file: File): Promise<strin
  * @param file - Arquivo de imagem (PNG)
  * @returns Caminho do arquivo no Storage
  */
-export async function uploadStamp(userId: string, file: File): Promise<string> {
-  const filePath = `${STAMPS_FOLDER}/${userId}/${file.name || `stamp_${Date.now()}.png`}`;
+export async function uploadStamp(userId: string, file: File, title?: string): Promise<string> {
+  // Sanitizar o nome do arquivo para evitar caracteres inválidos
+  let fileName: string;
+  if (title) {
+    // Usar o título do carimbo como base para o nome do arquivo
+    fileName = sanitizeFileName(`${title}.png`);
+  } else {
+    // Usar o nome original do arquivo, sanitizado
+    fileName = sanitizeFileName(file.name || `stamp_${Date.now()}.png`);
+  }
+  
+  const filePath = `${STAMPS_FOLDER}/${userId}/${fileName}`;
 
   const { data, error } = await supabase.storage
     .from(STORAGE_BUCKET)

@@ -14,6 +14,8 @@ import DocumentDetailPage from "@/pages/DocumentDetailPage";
 import ProfilePage from "@/pages/ProfilePage";
 import UsersManagementPage from "@/pages/UsersManagementPage";
 import AreasManagementPage from "@/pages/AreasManagementPage";
+import CompaniesManagementPage from "@/pages/CompaniesManagementPage";
+import StampsManagementPage from "@/pages/StampsManagementPage";
 import NotFound from "./pages/NotFound";
 import { supabase } from "@/lib/supabase";
 
@@ -154,6 +156,8 @@ const App = () => {
               <Route path="/perfil" element={<ProfilePage />} />
               <Route path="/gerenciar-usuarios" element={<UsersManagementPage />} />
               <Route path="/gerenciar-areas" element={<AreasManagementPage />} />
+              <Route path="/gerenciar-empresas" element={<CompaniesManagementPage />} />
+              <Route path="/gerenciar-carimbos" element={<StampsManagementPage />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

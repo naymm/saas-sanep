@@ -11,6 +11,25 @@ export interface Area {
   updatedAt: string;
 }
 
+export interface Company {
+  id: string;
+  name: string;
+  code: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CompanyStamp {
+  id: string;
+  companyId: string;
+  company?: Company; // Populado quando buscado com JOIN
+  title: string; // Título/nome do carimbo
+  stampUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface User {
   id: string;
   name: string;

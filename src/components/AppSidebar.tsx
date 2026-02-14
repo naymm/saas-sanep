@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useStore } from '@/store/useStore';
 import { ROLE_LABELS, DEPARTMENT_LABELS } from '@/types';
-import { FileText, LayoutDashboard, FilePlus, FolderOpen, UserCircle, LogOut, X, Users, Building2 } from 'lucide-react';
+import { FileText, LayoutDashboard, FilePlus, FolderOpen, UserCircle, LogOut, X, Users, Building2, Briefcase, Stamp } from 'lucide-react';
 
 interface SidebarProps {
   open: boolean;
@@ -15,6 +15,8 @@ const navItems = [
   { to: '/perfil', label: 'Perfil', icon: UserCircle },
   { to: '/gerenciar-usuarios', label: 'Gerenciar Usuários', icon: Users, roles: ['master'] as string[] },
   { to: '/gerenciar-areas', label: 'Gerenciar Áreas', icon: Building2, roles: ['master'] as string[] },
+  { to: '/gerenciar-empresas', label: 'Gerenciar Empresas', icon: Briefcase, roles: ['master'] as string[] },
+  { to: '/gerenciar-carimbos', label: 'Gerenciar Carimbos', icon: Stamp, roles: ['master'] as string[] },
 ];
 
 const AppSidebar = ({ open, onClose }: SidebarProps) => {
