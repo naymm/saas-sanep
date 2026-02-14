@@ -677,7 +677,7 @@ const DocumentDetailPage = () => {
             <CardTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
               Visualização do Documento
-              <span className="ml-2 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600">
+              <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                 Em Tramitação
               </span>
             </CardTitle>
