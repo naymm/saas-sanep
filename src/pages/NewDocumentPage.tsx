@@ -13,6 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 
 const NewDocumentPage = () => {
   const createDocument = useStore((s) => s.createDocument);
+  const loading = useStore((s) => s.loading);
   const navigate = useNavigate();
   const { toast } = useToast();
   const [title, setTitle] = useState('');
@@ -20,9 +21,17 @@ const NewDocumentPage = () => {
   const [description, setDescription] = useState('');
   const [fileName, setFileName] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Prevenir múltiplos envios
+    if (isSubmitting || loading) {
+      console.warn('⚠️ Tentativa de envio duplicado bloqueada');
+      return;
+    }
+    
     if (!title.trim() || !description.trim()) {
       toast({ title: 'Preencha todos os campos obrigatórios', variant: 'destructive' });
       return;
@@ -33,6 +42,7 @@ const NewDocumentPage = () => {
       return;
     }
 
+    setIsSubmitting(true);
     try {
       await createDocument({ 
         title, 
@@ -42,6 +52,11 @@ const NewDocumentPage = () => {
         file 
       });
       toast({ title: 'Documento enviado com sucesso!' });
+      // Limpar formulário
+      setTitle('');
+      setDescription('');
+      setFile(null);
+      setFileName('');
       navigate('/meus-documentos');
     } catch (error) {
       console.error('Erro ao criar documento:', error);
@@ -50,6 +65,8 @@ const NewDocumentPage = () => {
         description: error instanceof Error ? error.message : 'Não foi possível criar o documento',
         variant: 'destructive' 
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -109,8 +126,14 @@ const NewDocumentPage = () => {
               )}
             </div>
 
-            <Button type="submit" className="w-full gap-2">
-              <Send className="h-4 w-4" /> {useStore.getState().user?.role === 'secretaria_geral' ? 'Enviar para Conselho de Administração' : 'Enviar para Secretaria Geral'}
+            <Button type="submit" className="w-full gap-2" disabled={isSubmitting || loading}>
+              {isSubmitting || loading ? (
+                <>Processando...</>
+              ) : (
+                <>
+                  <Send className="h-4 w-4" /> {useStore.getState().user?.role === 'secretaria_geral' ? 'Enviar para Conselho de Administração' : 'Enviar para Secretaria Geral'}
+                </>
+              )}
             </Button>
           </form>
         </CardContent>

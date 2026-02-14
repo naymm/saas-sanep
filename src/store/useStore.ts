@@ -244,9 +244,19 @@ export const useStore = create<AppState>((set, get) => ({
   createDocument: async (data) => {
     try {
       const user = get().user;
-      if (!user) return;
+      if (!user) {
+        console.warn('⚠️ Tentativa de criar documento sem usuário autenticado');
+        return;
+      }
+
+      // Prevenir criação duplicada se já estiver processando
+      if (get().loading) {
+        console.warn('⚠️ Já existe uma operação de criação em andamento');
+        return;
+      }
 
       set({ loading: true, error: null });
+      console.log('📝 Criando novo documento:', { title: data.title, fileName: data.fileName });
 
       // Areas send to Secretaria Geral; Secretaria Geral sends directly to Conselho
       const initialStatus: DocumentStatus =
@@ -259,69 +269,50 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Fazer upload do PDF se fornecido
       let originalPdfStoragePath: string | undefined;
+      let newDoc: Document;
+      
       if (data.file) {
-        try {
-          // Primeiro criar o documento para obter o ID
-          const tempDoc = await supabaseService.createDocument({
-            ...data,
-            createdBy: user.id,
-            createdByName: user.name,
-            createdByRole: user.role,
-            createdByDepartment: user.department,
-            status: initialStatus,
-          });
+        // Primeiro criar o documento para obter o ID
+        newDoc = await supabaseService.createDocument({
+          ...data,
+          createdBy: user.id,
+          createdByName: user.name,
+          createdByRole: user.role,
+          createdByDepartment: user.department,
+          status: initialStatus,
+        });
+        
+        console.log('✅ Documento criado (ID:', newDoc.id, '). Fazendo upload do PDF...');
 
+        try {
           // Fazer upload do PDF
-          originalPdfStoragePath = await supabaseService.uploadOriginalPdf(tempDoc.id, data.file);
+          originalPdfStoragePath = await supabaseService.uploadOriginalPdf(newDoc.id, data.file);
 
           // Atualizar documento com o caminho do PDF
-          const newDoc = await supabaseService.updateDocument(tempDoc.id, {
+          newDoc = await supabaseService.updateDocument(newDoc.id, {
             originalPdfStoragePath,
           });
-
-          // Adicionar ação inicial
-          await supabaseService.addDocumentAction({
-            documentId: newDoc.id,
-            userId: user.id,
-            userName: user.name,
-            userRole: user.role,
-            action: actionLabel,
-          });
-
-          // Buscar usuário para notificar (Secretaria Geral ou Conselho)
-          const targetUsers = get().users.filter((u) =>
-            user.role === 'secretaria_geral' ? u.role === 'conselho_admin' : u.role === 'secretaria_geral'
-          );
-
-          // Criar notificações
-          if (targetUsers.length > 0) {
-            await supabaseService.createNotification({
-              userId: targetUsers[0].id,
-              message: `Novo documento recebido: ${data.title}`,
-              documentId: newDoc.id,
-            });
-          }
-
-          // Recarregar dados
-          await get().loadData();
-          set({ loading: false });
-          return;
+          
+          console.log('✅ PDF enviado com sucesso:', originalPdfStoragePath);
         } catch (uploadError) {
-          console.error('Erro ao fazer upload do PDF:', uploadError);
-          // Continuar sem o PDF se o upload falhar
+          console.error('❌ Erro ao fazer upload do PDF:', uploadError);
+          // O documento já foi criado, mas sem o PDF
+          // Continuar com o documento criado (sem PDF)
+          console.warn('⚠️ Documento criado mas sem PDF devido a erro no upload');
         }
+      } else {
+        // Criar documento no Supabase (sem PDF)
+        console.log('📝 Criando documento sem PDF');
+        newDoc = await supabaseService.createDocument({
+          ...data,
+          createdBy: user.id,
+          createdByName: user.name,
+          createdByRole: user.role,
+          createdByDepartment: user.department,
+          status: initialStatus,
+          originalPdfStoragePath,
+        });
       }
-
-      // Criar documento no Supabase (sem PDF ou se upload falhou)
-      const newDoc = await supabaseService.createDocument({
-        ...data,
-        createdBy: user.id,
-        createdByName: user.name,
-        createdByRole: user.role,
-        createdByDepartment: user.department,
-        status: initialStatus,
-        originalPdfStoragePath,
-      });
 
       // Adicionar ação inicial
       await supabaseService.addDocumentAction({
@@ -348,9 +339,12 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Recarregar dados
       await get().loadData();
+      set({ loading: false });
+      console.log('✅ Documento criado com sucesso:', newDoc.id);
     } catch (error) {
-      console.error('Erro ao criar documento:', error);
+      console.error('❌ Erro ao criar documento:', error);
       set({ error: 'Erro ao criar documento', loading: false });
+      throw error; // Re-lançar erro para que o frontend saiba
     }
   },
 

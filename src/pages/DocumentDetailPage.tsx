@@ -420,6 +420,73 @@ const DocumentDetailPage = () => {
         />
       )}
 
+      {/* Preview do PDF para Área (criador) - quando documento está em tramitação */}
+      {user.role === 'area' && doc.createdBy === user.id && !isConselhoSigning && doc.status !== 'finalizado' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Visualização do Documento
+              <span className="ml-2 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600">
+                Em Tramitação
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="relative w-full border rounded-lg overflow-hidden bg-muted" style={{ minHeight: '600px' }}>
+              {pdfUrlError ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-muted gap-4">
+                  <p className="text-destructive">{pdfUrlError}</p>
+                  <Button variant="outline" onClick={() => {
+                    const link = document.createElement('a');
+                    link.href = displayPdfUrl;
+                    link.target = '_blank';
+                    link.click();
+                  }}>
+                    <FileText className="mr-2 h-4 w-4" />Abrir PDF em Nova Aba
+                  </Button>
+                </div>
+              ) : (
+                <iframe
+                  src={displayPdfUrl}
+                  className="w-full h-full"
+                  style={{ minHeight: '600px' }}
+                  title="Preview do Documento"
+                  onError={() => {
+                    setPdfUrlError('Erro ao carregar PDF');
+                    toast({
+                      title: 'Erro ao carregar PDF',
+                      description: 'Não foi possível exibir o PDF. Tente abrir em nova aba.',
+                      variant: 'destructive',
+                    });
+                  }}
+                />
+              )}
+            </div>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button variant="outline" onClick={() => {
+                const link = document.createElement('a');
+                link.href = displayPdfUrl;
+                link.download = doc.fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}>
+                <FileText className="mr-2 h-4 w-4" />Baixar PDF
+              </Button>
+              <Button variant="outline" onClick={() => {
+                const link = document.createElement('a');
+                link.href = displayPdfUrl;
+                link.target = '_blank';
+                link.click();
+              }}>
+                <FileText className="mr-2 h-4 w-4" />Abrir em Nova Aba
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Preview do PDF para Secretaria - quando documento está pendente_secretaria */}
       {canSecretariaAct && !isConselhoSigning && (
         <Card>
