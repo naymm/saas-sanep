@@ -2,7 +2,7 @@ import { getSignedPdfUrl, downloadSignedPdf } from './supabaseService';
 
 /**
  * Obtém a URL do PDF assinado, seja do Storage ou data URL
- * @param signedPdfUrl - URL do PDF (pode ser data URL ou referência ao Storage)
+ * @param signedPdfUrl - URL do PDF (pode ser data URL, referência ao Storage ou caminho direto)
  * @returns URL pública do PDF
  */
 export async function getPdfUrl(signedPdfUrl?: string): Promise<string | undefined> {
@@ -16,6 +16,26 @@ export async function getPdfUrl(signedPdfUrl?: string): Promise<string | undefin
     } catch (error) {
       console.error('Erro ao obter URL do Storage:', error);
       return undefined;
+    }
+  }
+
+  // Se for uma URL HTTP/HTTPS, verificar se é do Supabase Storage
+  // URLs do Supabase Storage geralmente contêm 'storage.supabase.co'
+  if (signedPdfUrl.startsWith('http://') || signedPdfUrl.startsWith('https://')) {
+    // Se já é uma URL pública, retornar diretamente
+    return signedPdfUrl;
+  }
+
+  // Se for um caminho do Storage (sem prefixo), tentar obter a URL pública
+  // Caminhos do Storage geralmente têm formato: documentId/filename.pdf ou signatures/userId/file.png
+  if (!signedPdfUrl.includes('://') && !signedPdfUrl.startsWith('data:')) {
+    try {
+      // Assumir que é um caminho do Storage
+      return await getSignedPdfUrl(signedPdfUrl);
+    } catch (error) {
+      console.warn('Tentativa de obter URL do Storage falhou, usando como está:', error);
+      // Se falhar, retornar como está (pode ser um caminho relativo)
+      return signedPdfUrl;
     }
   }
 

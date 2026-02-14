@@ -571,44 +571,213 @@ export async function updateDocument(id: string, updates: {
   signedPdfStoragePath?: string;
   originalPdfStoragePath?: string;
 }): Promise<Document> {
-  const updateData: any = {};
-  if (updates.status !== undefined) updateData.status = updates.status;
-  if (updates.signedPdfUrl !== undefined) updateData.signed_pdf_url = updates.signedPdfUrl || null;
-  if (updates.signedPdfStoragePath !== undefined) updateData.signed_pdf_storage_path = updates.signedPdfStoragePath || null;
-  if (updates.originalPdfStoragePath !== undefined) updateData.original_pdf_storage_path = updates.originalPdfStoragePath || null;
-  if (updates.originalPdfStoragePath !== undefined) updateData.original_pdf_storage_path = updates.originalPdfStoragePath || null;
-
-  const { data, error } = await supabase
-    .from('documents')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Erro ao atualizar documento:', error);
+  console.log('🔵 updateDocument chamado:', { id, updates });
+  
+  // 1. Validar UUID
+  if (!id || typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    const error = new Error(`ID inválido: deve ser um UUID válido. Recebido: ${id}`);
+    console.error('❌', error.message);
     throw error;
   }
 
-  // Buscar ações e assinaturas atualizadas
-  const [actionsResult, signaturesResult] = await Promise.all([
-    supabase
-      .from('document_actions')
-      .select('*')
-      .eq('document_id', id)
-      .order('timestamp', { ascending: true }),
-    supabase
-      .from('document_signatures')
-      .select('*')
-      .eq('document_id', id)
-      .order('timestamp', { ascending: true }),
-  ]);
+  // 2. Construir payload apenas com campos válidos e não-undefined
+  const updateData: Record<string, any> = {};
+  
+  // 3. Validar e adicionar status (enum)
+  if (updates.status !== undefined) {
+    const validStatuses = ['pendente_secretaria', 'pendente_conselho', 'aprovado', 'rejeitado', 'finalizado'];
+    if (!validStatuses.includes(updates.status)) {
+      const error = new Error(`Status inválido: ${updates.status}. Deve ser um dos: ${validStatuses.join(', ')}`);
+      console.error('❌', error.message);
+      throw error;
+    }
+    updateData.status = updates.status;
+    console.log('✅ Status validado e adicionado:', updates.status);
+  }
+  
+  // 4. Adicionar signed_pdf_url (snake_case para o banco)
+  // IMPORTANTE: Não enviar data URLs muito grandes - usar apenas storage path
+  if (updates.signedPdfUrl !== undefined) {
+    if (updates.signedPdfUrl === null || updates.signedPdfUrl === '') {
+      updateData.signed_pdf_url = null;
+    } else if (typeof updates.signedPdfUrl === 'string') {
+      // Se for data URL muito grande (>100KB), não enviar (usar apenas storage path)
+      if (updates.signedPdfUrl.startsWith('data:') && updates.signedPdfUrl.length > 100000) {
+        console.warn('⚠️ signedPdfUrl é uma data URL muito grande, não enviando (usar apenas storage path)');
+        updateData.signed_pdf_url = null; // Não enviar data URL muito grande
+      } else {
+        updateData.signed_pdf_url = updates.signedPdfUrl;
+      }
+    }
+  }
+  
+  // 5. Adicionar signed_pdf_storage_path
+  if (updates.signedPdfStoragePath !== undefined) {
+    updateData.signed_pdf_storage_path = (updates.signedPdfStoragePath && updates.signedPdfStoragePath.trim() !== '') 
+      ? updates.signedPdfStoragePath 
+      : null;
+  }
+  
+  // 6. Adicionar original_pdf_storage_path
+  // IMPORTANTE: Só adicionar se for explicitamente definido (undefined = não atualizar, null = limpar, string = atualizar)
+  if (updates.originalPdfStoragePath !== undefined) {
+    if (updates.originalPdfStoragePath === null || updates.originalPdfStoragePath === '') {
+      updateData.original_pdf_storage_path = null;
+    } else if (typeof updates.originalPdfStoragePath === 'string' && updates.originalPdfStoragePath.trim() !== '') {
+      updateData.original_pdf_storage_path = updates.originalPdfStoragePath.trim();
+    } else {
+      // Valor inválido, não incluir
+      console.warn('⚠️ originalPdfStoragePath tem valor inválido, não incluindo no update');
+    }
+  }
 
-  return {
-    ...mapDocumentFromDb(data),
-    history: (actionsResult.data || []).map(mapActionFromDb),
-    signatures: (signaturesResult.data || []).map(mapSignatureFromDb),
-  };
+  // 7. Garantir que há pelo menos um campo para atualizar
+  if (Object.keys(updateData).length === 0) {
+    console.warn('⚠️ Nenhum campo para atualizar');
+    return await getDocumentById(id) || Promise.reject(new Error('Documento não encontrado'));
+  }
+
+  // 8. Remover qualquer undefined que possa ter escapado e validar valores
+  const finalUpdateData: Record<string, any> = {};
+  for (const [key, value] of Object.entries(updateData)) {
+    // Pular valores undefined
+    if (value === undefined) {
+      console.warn(`⚠️ Pulando campo undefined: ${key}`);
+      continue;
+    }
+    
+    // Validar tipos
+    if (key === 'status') {
+      if (typeof value !== 'string') {
+        const error = new Error(`Campo 'status' deve ser string, recebido: ${typeof value}`);
+        console.error('❌', error.message);
+        throw error;
+      }
+      finalUpdateData[key] = value;
+    } else if (key.includes('_url') || key.includes('_path')) {
+      // URLs e paths podem ser null ou string
+      if (value === null) {
+        finalUpdateData[key] = null;
+      } else if (typeof value === 'string') {
+        // Remover espaços em branco e verificar se não está vazio
+        const trimmed = value.trim();
+        if (trimmed === '') {
+          finalUpdateData[key] = null;
+        } else {
+          finalUpdateData[key] = trimmed;
+        }
+      } else {
+        const error = new Error(`Campo '${key}' deve ser string ou null, recebido: ${typeof value} (${value})`);
+        console.error('❌', error.message);
+        throw error;
+      }
+    } else {
+      // Outros campos
+      finalUpdateData[key] = value;
+    }
+  }
+
+  // 9. Garantir que há pelo menos um campo válido
+  if (Object.keys(finalUpdateData).length === 0) {
+    console.warn('⚠️ Nenhum campo válido para atualizar após validação');
+    return await getDocumentById(id) || Promise.reject(new Error('Documento não encontrado'));
+  }
+
+  // 10. Status não é obrigatório - pode atualizar apenas outros campos (ex: originalPdfStoragePath)
+  // O status só é necessário quando estamos mudando o status do documento
+  // Se não há status no payload, significa que estamos atualizando apenas outros campos
+
+  console.log('🚀 Enviando PATCH ao Supabase:', {
+    id,
+    updatePayloadOriginal: JSON.stringify(updateData, null, 2),
+    updatePayloadFinal: JSON.stringify(finalUpdateData, null, 2),
+    keys: Object.keys(finalUpdateData),
+    statusValue: finalUpdateData.status,
+    hasStatus: !!finalUpdateData.status,
+  });
+
+  try {
+    // Validar estrutura final antes de enviar
+    const payloadToSend = JSON.parse(JSON.stringify(finalUpdateData)); // Deep clone para garantir que não há referências
+    
+    console.log('📤 Payload final a ser enviado:', {
+      id,
+      payload: JSON.stringify(payloadToSend, null, 2),
+      keys: Object.keys(payloadToSend),
+      types: Object.fromEntries(
+        Object.entries(payloadToSend).map(([k, v]) => [k, typeof v])
+      ),
+    });
+
+    const { data, error } = await supabase
+      .from('documents')
+      .update(payloadToSend)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Erro ao atualizar documento:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+        id,
+        updatePayloadOriginal: JSON.stringify(updateData, null, 2),
+        updatePayloadFinal: JSON.stringify(finalUpdateData, null, 2),
+        payloadEnviado: JSON.stringify(payloadToSend, null, 2),
+      });
+      
+      // Mensagens de erro específicas
+      if (error.code === 'PGRST116') {
+        throw new Error('Documento não encontrado');
+      } else if (error.code === '42501') {
+        throw new Error('Erro de permissão (RLS). Verifique as políticas do Supabase.');
+      } else if (error.code === '23505') {
+        throw new Error('Violação de constraint única');
+      } else if (error.code === '23503') {
+        throw new Error('Violação de chave estrangeira');
+      } else if (error.code === 'PGRST301' || error.code === '400') {
+        throw new Error(`Requisição inválida (400): ${error.message}. ${error.details || ''} ${error.hint || ''}`);
+      } else {
+        throw new Error(`Erro ao atualizar documento: ${error.message}`);
+      }
+    }
+
+    if (!data) {
+      throw new Error('Documento não encontrado após atualização');
+    }
+
+    // Buscar ações e assinaturas atualizadas
+    const [actionsResult, signaturesResult] = await Promise.all([
+      supabase
+        .from('document_actions')
+        .select('*')
+        .eq('document_id', id)
+        .order('timestamp', { ascending: true }),
+      supabase
+        .from('document_signatures')
+        .select('*')
+        .eq('document_id', id)
+        .order('timestamp', { ascending: true }),
+    ]);
+
+    console.log('✅ Documento atualizado com sucesso:', {
+      id,
+      status: data.status,
+      hasActions: (actionsResult.data || []).length,
+      hasSignatures: (signaturesResult.data || []).length,
+    });
+
+    return {
+      ...mapDocumentFromDb(data),
+      history: (actionsResult.data || []).map(mapActionFromDb),
+      signatures: (signaturesResult.data || []).map(mapSignatureFromDb),
+    };
+  } catch (err: any) {
+    console.error('❌ Erro inesperado ao atualizar documento:', err);
+    throw err;
+  }
 }
 
 export async function addDocumentAction(action: {
@@ -846,6 +1015,39 @@ export async function uploadSignedPdf(
 }
 
 /**
+ * Substitui um PDF original no Storage pelo PDF assinado
+ * @param existingPath - Caminho do PDF original no Storage
+ * @param pdfBytes - Bytes do PDF assinado
+ * @returns Caminho do arquivo no Storage (mesmo caminho)
+ */
+export async function replaceOriginalPdf(
+  existingPath: string,
+  pdfBytes: Uint8Array
+): Promise<string> {
+  console.log('🔄 Substituindo PDF original:', existingPath);
+
+  const { data, error } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .update(existingPath, pdfBytes, {
+      contentType: 'application/pdf',
+      upsert: true, // Garantir que substitui se existir
+    });
+
+  if (error) {
+    console.error('❌ Erro ao substituir PDF original:', error);
+    console.error('Detalhes do erro:', {
+      message: error.message,
+      statusCode: (error as any).statusCode,
+      path: existingPath,
+    });
+    throw error;
+  }
+
+  console.log('✅ PDF original substituído com sucesso:', existingPath);
+  return existingPath;
+}
+
+/**
  * Obtém a URL pública de um PDF armazenado no Storage
  * @param filePath - Caminho do arquivo no Storage
  * @returns URL pública do arquivo
@@ -855,7 +1057,11 @@ export async function getSignedPdfUrl(filePath: string): Promise<string> {
     .from(STORAGE_BUCKET)
     .getPublicUrl(filePath);
 
-  return data.publicUrl;
+  // Adicionar timestamp para evitar cache do navegador quando o arquivo é atualizado
+  const url = new URL(data.publicUrl);
+  url.searchParams.set('t', Date.now().toString());
+  
+  return url.toString();
 }
 
 /**

@@ -20,9 +20,18 @@ const DashboardPage = () => {
     (d) => d.createdBy === user.id && !['finalizado', 'rejeitado'].includes(d.status)
   );
 
-  const finished = documents.filter(
-    (d) => d.createdBy === user.id && ['finalizado', 'rejeitado'].includes(d.status)
-  );
+  const finished = documents.filter((d) => {
+    // Área: apenas documentos que criou
+    if (user.role === 'area') {
+      return d.createdBy === user.id && ['finalizado', 'rejeitado'].includes(d.status);
+    }
+    // Secretaria Geral e Conselho: todos os documentos finalizados
+    if (user.role === 'secretaria_geral' || user.role === 'conselho_admin') {
+      return d.status === 'finalizado';
+    }
+    // Outros roles: apenas documentos que criou
+    return d.createdBy === user.id && ['finalizado', 'rejeitado'].includes(d.status);
+  });
 
   const roleLabel = user.role === 'area' && user.department
     ? DEPARTMENT_LABELS[user.department]

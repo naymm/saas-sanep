@@ -354,46 +354,112 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  advanceDocument: async (docId, action, comment, signatureUrl, signedPdfUrl) => {
-    try {
-      const user = get().user;
-      if (!user) return;
+      advanceDocument: async (docId, action, comment, signatureUrl, signedPdfUrl) => {
+        console.log('🚀 advanceDocument INICIADO:', { docId, action, hasSignatureUrl: !!signatureUrl, hasSignedPdfUrl: !!signedPdfUrl });
+        try {
+          const user = get().user;
+          if (!user) {
+            console.error('❌ Usuário não autenticado');
+            return;
+          }
 
-      set({ loading: true, error: null });
+          set({ loading: true, error: null });
 
-      const doc = get().documents.find((d) => d.id === docId);
-      if (!doc) return;
+          const doc = get().documents.find((d) => d.id === docId);
+          if (!doc) {
+            console.error('❌ Documento não encontrado:', docId);
+            return;
+          }
+          
+          console.log('📄 Documento encontrado:', { id: doc.id, status: doc.status, title: doc.title });
 
       let nextStatus: DocumentStatus = doc.status;
       let addSignature = false;
 
-      // Secretaria Geral forwards to Conselho
+      console.log('advanceDocument - Estado inicial:', {
+        userId: user.id,
+        userRole: user.role,
+        docId: docId,
+        currentStatus: doc.status,
+        hasSignatures: doc.signatures?.length || 0,
+      });
+
+      // Secretaria Geral forwards to Conselho (se documento ainda não foi assinado)
       if (user.role === 'secretaria_geral' && doc.status === 'pendente_secretaria') {
-        nextStatus = 'pendente_conselho';
+        // Verificar se já foi assinado pelo conselho
+        const hasConselhoSignature = doc.signatures && doc.signatures.some(sig => sig.role === 'conselho_admin');
+        if (hasConselhoSignature) {
+          // Se já foi assinado, finalizar
+          nextStatus = 'finalizado';
+          // Atualizar ação se não foi fornecida
+          if (!action || action.trim() === '') {
+            action = 'Documento finalizado pela Secretaria Geral';
+          }
+          console.log('Secretaria finalizando documento já assinado');
+        } else {
+          // Se não foi assinado, encaminhar para conselho
+          nextStatus = 'pendente_conselho';
+          // Atualizar ação se não foi fornecida
+          if (!action || action.trim() === '') {
+            action = 'Documento encaminhado para Conselho de Administração';
+          }
+          console.log('Secretaria encaminhando para conselho');
+        }
       }
-      // Conselho approves and signs → finalizado
+      // Conselho approves and signs → finaliza o documento
       else if (user.role === 'conselho_admin' && doc.status === 'pendente_conselho') {
-        nextStatus = 'finalizado';
+        nextStatus = 'finalizado'; // Finaliza após assinatura do conselho
         addSignature = true;
+        // Atualizar ação para refletir que foi finalizado
+        if (!action || action === 'Aprovado e assinado') {
+          action = 'Documento aprovado, assinado e finalizado pelo Conselho de Administração';
+        }
+        console.log('Conselho assinando - mudando status para finalizado');
+      } else {
+        console.warn('Nenhuma condição de atualização de status atendida:', {
+          userRole: user.role,
+          docStatus: doc.status,
+        });
       }
 
       // Se houver PDF assinado (data URL), fazer upload para o Storage
       let signedPdfStoragePath: string | undefined;
-      if (signedPdfUrl && signedPdfUrl.startsWith('data:')) {
+      let originalPdfStoragePath: string | undefined = doc.originalPdfStoragePath;
+      
+      if (signedPdfUrl && signedPdfUrl.startsWith('data:') && addSignature) {
         try {
           // Converter data URL para bytes
           const base64 = signedPdfUrl.split(',')[1];
           if (base64) {
             const pdfBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-            // Fazer upload para o Storage
-            signedPdfStoragePath = await supabaseService.uploadSignedPdf(
-              docId,
-              pdfBytes,
-              `${doc.fileName.replace('.pdf', '')}_assinado.pdf`
-            );
-            // Obter URL pública do Storage
-            const publicUrl = await supabaseService.getSignedPdfUrl(signedPdfStoragePath);
+            
+            // Se o documento já tem um PDF original, substituir usando o mesmo caminho
+            // IMPORTANTE: Isso elimina o PDF não assinado, substituindo-o pelo assinado
+            if (doc.originalPdfStoragePath) {
+              // Substituir o PDF original pelo assinado no mesmo caminho
+              // Isso elimina o PDF não assinado e mantém apenas o assinado
+              originalPdfStoragePath = await supabaseService.replaceOriginalPdf(
+                doc.originalPdfStoragePath,
+                pdfBytes
+              );
+              signedPdfStoragePath = originalPdfStoragePath; // Mesmo caminho
+              console.log('✅ PDF original substituído pelo assinado no mesmo caminho:', originalPdfStoragePath);
+            } else {
+              // Se não houver PDF original, criar novo
+              signedPdfStoragePath = await supabaseService.uploadSignedPdf(
+                docId,
+                pdfBytes,
+                doc.fileName
+              );
+              originalPdfStoragePath = signedPdfStoragePath;
+              console.log('✅ PDF assinado criado:', signedPdfStoragePath);
+            }
+            
+            // Obter URL pública do Storage com cache-busting
+            // IMPORTANTE: Adicionar timestamp para garantir que o navegador carregue o PDF atualizado (assinado)
+            const publicUrl = await supabaseService.getSignedPdfUrl(originalPdfStoragePath);
             signedPdfUrl = publicUrl;
+            console.log('✅ URL pública do PDF assinado gerada:', publicUrl);
           }
         } catch (uploadError) {
           console.error('Erro ao fazer upload do PDF:', uploadError);
@@ -401,22 +467,159 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Atualizar documento
-      await supabaseService.updateDocument(docId, {
-        status: nextStatus,
-        signedPdfUrl,
-        signedPdfStoragePath,
+      // Atualizar documento - construir payload limpo
+      const updatePayload: {
+        status: DocumentStatus;
+        signedPdfUrl?: string;
+        signedPdfStoragePath?: string;
+        originalPdfStoragePath?: string;
+      } = {
+        status: nextStatus, // Sempre atualizar o status
+      };
+
+      // Só adicionar campos se tiverem valores definidos, não forem undefined e não forem strings vazias
+      if (signedPdfUrl !== undefined && signedPdfUrl !== null && signedPdfUrl.trim() !== '') {
+        // Não enviar data URLs muito grandes
+        if (!signedPdfUrl.startsWith('data:') || signedPdfUrl.length <= 100000) {
+          updatePayload.signedPdfUrl = signedPdfUrl.trim();
+        } else {
+          console.warn('⚠️ signedPdfUrl é uma data URL muito grande, não incluindo no payload');
+        }
+      }
+      
+      // Para signedPdfStoragePath, só adicionar se houver assinatura (addSignature = true)
+      // IMPORTANTE: Quando o conselho assina, o PDF original é substituído pelo assinado no mesmo caminho
+      // Isso elimina o PDF não assinado e mantém apenas o assinado
+      if (addSignature) {
+        if (signedPdfStoragePath && signedPdfStoragePath.trim() !== '') {
+          updatePayload.signedPdfStoragePath = signedPdfStoragePath.trim();
+          console.log('✅ signedPdfStoragePath atualizado:', signedPdfStoragePath);
+        } else if (originalPdfStoragePath && originalPdfStoragePath.trim() !== '') {
+          // Quando substituímos no mesmo caminho, signedPdfStoragePath = originalPdfStoragePath
+          updatePayload.signedPdfStoragePath = originalPdfStoragePath.trim();
+          console.log('✅ signedPdfStoragePath aponta para o mesmo caminho do original (PDF substituído):', originalPdfStoragePath);
+        }
+      }
+      // Se não está assinando, não incluir signedPdfStoragePath no payload
+      
+      // Para originalPdfStoragePath, quando há assinatura:
+      // - Se foi substituído no mesmo caminho, não precisa atualizar (já aponta para o PDF assinado)
+      // - Se foi criado um novo caminho, atualizar
+      // IMPORTANTE: Quando substituímos no mesmo caminho, o originalPdfStoragePath já aponta para o PDF assinado
+      if (addSignature && originalPdfStoragePath !== undefined && originalPdfStoragePath !== null && originalPdfStoragePath.trim() !== '') {
+        if (originalPdfStoragePath !== doc.originalPdfStoragePath) {
+          // Novo caminho criado, atualizar
+          updatePayload.originalPdfStoragePath = originalPdfStoragePath.trim();
+          console.log('📝 Atualizando originalPdfStoragePath para novo caminho:', originalPdfStoragePath);
+        } else {
+          // Substituído no mesmo caminho - o PDF original foi eliminado e substituído pelo assinado
+          // Não precisa atualizar o caminho, mas garantir que signedPdfStoragePath aponte para o mesmo lugar
+          console.log('✅ PDF substituído no mesmo caminho - PDF não assinado foi eliminado');
+        }
+      }
+
+      // Validar que o status é válido
+      const validStatuses: DocumentStatus[] = ['pendente_secretaria', 'pendente_conselho', 'aprovado', 'rejeitado', 'finalizado'];
+      if (!validStatuses.includes(nextStatus)) {
+        console.error('❌ Status inválido:', nextStatus);
+        throw new Error(`Status inválido: ${nextStatus}`);
+      }
+
+      // Garantir que o status está sempre presente no payload
+      if (!updatePayload.status) {
+        console.error('❌ Status não está presente no updatePayload!');
+        updatePayload.status = nextStatus;
+      }
+
+      console.log('📝 Atualizando documento com payload:', {
+        docId,
+        statusAnterior: doc.status,
+        statusNovo: nextStatus,
+        updatePayload: {
+          ...updatePayload,
+          status: updatePayload.status, // Garantir que está presente
+        },
+        addSignature,
+        signedPdfUrl: signedPdfUrl ? 'presente' : 'ausente',
+        signedPdfStoragePath: (addSignature && signedPdfStoragePath) ? 'presente' : 'ausente',
+        originalPdfStoragePath: originalPdfStoragePath ? 'presente' : 'ausente',
       });
 
-      // Adicionar ação
-      await supabaseService.addDocumentAction({
-        documentId: docId,
-        userId: user.id,
-        userName: user.name,
-        userRole: user.role,
-        action,
-        comment,
-      });
+      // Atualizar documento no banco
+      console.log('🔄 Chamando supabaseService.updateDocument...');
+      try {
+        const updatedDoc = await supabaseService.updateDocument(docId, updatePayload);
+        
+        console.log('✅ Documento atualizado no banco:', {
+          id: docId,
+          statusAnterior: doc.status,
+          statusNovo: nextStatus,
+          statusRetornado: updatedDoc.status,
+          statusCorreto: updatedDoc.status === nextStatus,
+          updatePayload,
+          userRole: user.role,
+        });
+
+        // Verificar se o status foi atualizado corretamente
+        if (updatedDoc.status !== nextStatus) {
+          console.error('⚠️ ATENÇÃO: Status não foi atualizado corretamente!', {
+            esperado: nextStatus,
+            retornado: updatedDoc.status,
+            docId,
+            userRole: user.role,
+            updatePayload,
+          });
+          // Tentar atualizar novamente apenas o status
+          try {
+            console.log('🔄 Tentando corrigir status...');
+            const retryDoc = await supabaseService.updateDocument(docId, { status: nextStatus });
+            console.log('🔄 Tentativa de correção do status:', {
+              statusEsperado: nextStatus,
+              statusRetornado: retryDoc.status,
+              sucesso: retryDoc.status === nextStatus,
+            });
+          } catch (retryError: any) {
+            console.error('❌ Erro ao tentar corrigir status:', {
+              error: retryError,
+              message: retryError.message,
+              code: retryError.code,
+            });
+          }
+        } else {
+          console.log('✅ Status atualizado corretamente!');
+        }
+      } catch (updateError: any) {
+        console.error('❌ Erro ao atualizar documento:', {
+          error: updateError,
+          message: updateError.message,
+          code: updateError.code,
+          details: updateError.details,
+          hint: updateError.hint,
+          docId,
+          statusEsperado: nextStatus,
+          statusAtual: doc.status,
+          userRole: user.role,
+          updatePayload: JSON.stringify(updatePayload, null, 2),
+        });
+        throw updateError;
+      }
+
+      // Adicionar ação ao histórico ANTES de atualizar o documento
+      // Isso garante que a ação seja registrada mesmo se houver erro na atualização
+      try {
+        await supabaseService.addDocumentAction({
+          documentId: docId,
+          userId: user.id,
+          userName: user.name,
+          userRole: user.role,
+          action,
+          comment,
+        });
+        console.log('Ação adicionada ao histórico:', { action, comment });
+      } catch (actionError) {
+        console.error('Erro ao adicionar ação ao histórico:', actionError);
+        // Continuar mesmo se falhar ao adicionar ação
+      }
 
       // Adicionar assinatura se necessário
       if (addSignature && signatureUrl) {
@@ -430,12 +633,20 @@ export const useStore = create<AppState>((set, get) => ({
       }
 
       // Criar notificação
-      const targetUserId =
-        nextStatus === 'pendente_conselho'
-          ? get().users.find((u) => u.role === 'conselho_admin')?.id
-          : nextStatus === 'finalizado'
-          ? doc.createdBy
-          : doc.createdBy;
+      let targetUserId: string | undefined;
+      if (nextStatus === 'pendente_conselho') {
+        // Notificar conselho
+        targetUserId = get().users.find((u) => u.role === 'conselho_admin')?.id;
+      } else if (nextStatus === 'finalizado') {
+        // Notificar criador do documento quando finalizado
+        targetUserId = doc.createdBy;
+      } else if (nextStatus === 'pendente_secretaria') {
+        // Notificar secretaria quando documento volta para ela
+        targetUserId = get().users.find((u) => u.role === 'secretaria_geral')?.id;
+      } else {
+        // Fallback: notificar criador
+        targetUserId = doc.createdBy;
+      }
 
       if (targetUserId) {
         await supabaseService.createNotification({
@@ -445,8 +656,29 @@ export const useStore = create<AppState>((set, get) => ({
         });
       }
 
-      // Recarregar dados
+      // Recarregar dados para atualizar a lista de documentos (após todas as operações)
+      console.log('Recarregando dados após atualização do documento...');
       await get().loadData();
+      
+      // Verificar se o status foi atualizado corretamente
+      const updatedDocAfterReload = get().documents.find((d) => d.id === docId);
+      if (updatedDocAfterReload) {
+        console.log('Status após recarregar:', {
+          docId,
+          statusEsperado: nextStatus,
+          statusAtual: updatedDocAfterReload.status,
+          statusCorreto: updatedDocAfterReload.status === nextStatus,
+        });
+        
+        if (updatedDocAfterReload.status !== nextStatus) {
+          console.error('⚠️ ATENÇÃO: Status não foi atualizado corretamente!', {
+            esperado: nextStatus,
+            atual: updatedDocAfterReload.status,
+          });
+        }
+      } else {
+        console.warn('Documento não encontrado após recarregar dados');
+      }
     } catch (error) {
       console.error('Erro ao avançar documento:', error);
       set({ error: 'Erro ao avançar documento', loading: false });

@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import PdfViewerWithSignature from '@/components/PdfViewerWithSignature';
 import { applySignatureToPdf, fetchPdfAsBytes, pdfBytesToDataUrl } from '@/lib/pdfUtils';
 import { getPdfUrl } from '@/lib/pdfStorage';
+import * as supabaseService from '@/lib/supabaseService';
 
 const DocumentDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -35,27 +36,109 @@ const DocumentDetailPage = () => {
     );
   }
 
-  const canAct =
-    (user.role === 'secretaria_geral' && doc.status === 'pendente_secretaria') ||
-    (user.role === 'conselho_admin' && doc.status === 'pendente_conselho');
+  // Secretaria pode atuar quando:
+  // 1. Documento está pendente_secretaria (novo ou retornado do conselho)
+  // 2. Se já foi assinado pelo conselho, pode finalizar
+  const canSecretariaAct = user.role === 'secretaria_geral' && doc.status === 'pendente_secretaria';
+  const canConselhoAct = user.role === 'conselho_admin' && doc.status === 'pendente_conselho';
+  const canAct = canSecretariaAct || canConselhoAct;
+  
+  // Verificar se documento já foi assinado pelo conselho
+  const hasConselhoSignature = doc.signatures && doc.signatures.some(sig => sig.role === 'conselho_admin');
 
   const isConselhoSigning = user.role === 'conselho_admin' && doc.status === 'pendente_conselho';
   
-  // URL do PDF - sempre usar o PDF assinado se disponível, senão usa o original
-  // Em produção, cada documento teria seu próprio PDF, mas para demo usamos o mesmo
-  // IMPORTANTE: Se o documento foi assinado, sempre mostrar o PDF assinado
-  const pdfUrl = doc.signedPdfUrl || '/documento.pdf';
+  // URL do PDF - usar originalPdfStoragePath que contém o PDF assinado se o documento foi finalizado
+  // Se o documento foi assinado, o originalPdfStoragePath já contém o PDF assinado (substituído)
+  const [displayPdfUrl, setDisplayPdfUrl] = useState<string>('/documento.pdf');
+  const [pdfUrlError, setPdfUrlError] = useState<string | null>(null);
   
-  // Para conselho assinando, sempre usar o PDF original (ainda não assinado)
-  const displayPdfUrl = isConselhoSigning ? '/documento.pdf' : pdfUrl;
+  useEffect(() => {
+    const loadPdfUrl = async () => {
+      try {
+        setPdfUrlError(null);
+        let url: string | undefined;
+        
+        if (isConselhoSigning && doc.originalPdfStoragePath) {
+          // Para conselho assinando, usar o PDF original (ainda não assinado)
+          url = await getPdfUrl(doc.originalPdfStoragePath);
+        } else if (doc.status === 'finalizado') {
+          // Documento finalizado: SEMPRE usar o PDF assinado
+          // Prioridade: signedPdfUrl > signedPdfStoragePath > originalPdfStoragePath (que foi substituído pelo assinado)
+          console.log('📄 Carregando PDF assinado para documento finalizado:', {
+            hasSignedPdfUrl: !!doc.signedPdfUrl,
+            hasSignedPdfStoragePath: !!doc.signedPdfStoragePath,
+            hasOriginalPdfStoragePath: !!doc.originalPdfStoragePath,
+            signedPdfUrl: doc.signedPdfUrl?.substring(0, 100),
+            signedPdfStoragePath: doc.signedPdfStoragePath,
+            originalPdfStoragePath: doc.originalPdfStoragePath,
+          });
+          
+          if (doc.signedPdfUrl) {
+            url = await getPdfUrl(doc.signedPdfUrl);
+            console.log('✅ Usando signedPdfUrl:', url?.substring(0, 100));
+          } else if (doc.signedPdfStoragePath) {
+            url = await getPdfUrl(doc.signedPdfStoragePath);
+            console.log('✅ Usando signedPdfStoragePath:', url?.substring(0, 100));
+          } else if (doc.originalPdfStoragePath) {
+            // Se não há signedPdfUrl/signedPdfStoragePath, o originalPdfStoragePath foi substituído pelo assinado
+            url = await getPdfUrl(doc.originalPdfStoragePath);
+            console.log('✅ Usando originalPdfStoragePath (substituído pelo assinado):', url?.substring(0, 100));
+          } else {
+            setPdfUrlError('PDF assinado não encontrado para documento finalizado');
+            console.error('❌ PDF assinado não encontrado para documento finalizado');
+          }
+        } else if (doc.originalPdfStoragePath) {
+          // Documento ainda não finalizado: usar originalPdfStoragePath
+          url = await getPdfUrl(doc.originalPdfStoragePath);
+        } else if (doc.signedPdfUrl) {
+          // Fallback: usar signedPdfUrl se disponível
+          url = await getPdfUrl(doc.signedPdfUrl);
+        } else {
+          url = '/documento.pdf'; // Fallback para demo
+        }
+        
+        if (url) {
+          setDisplayPdfUrl(url);
+        } else {
+          setPdfUrlError('URL do PDF não disponível');
+        }
+      } catch (error) {
+        console.error('Erro ao carregar URL do PDF:', error);
+        setPdfUrlError(error instanceof Error ? error.message : 'Erro desconhecido');
+        // Usar fallback em caso de erro
+        setDisplayPdfUrl('/documento.pdf');
+      }
+    };
+    
+    loadPdfUrl();
+  }, [doc.originalPdfStoragePath, doc.signedPdfUrl, doc.signedPdfStoragePath, doc.status, isConselhoSigning]);
 
   const handleAdvance = async () => {
     let action = '';
     if (user.role === 'secretaria_geral') {
-      action = 'Encaminhado para Conselho de Administração';
-      advanceDocument(doc.id, action, comment || undefined);
-      toast({ title: 'Ação realizada com sucesso!' });
-      setComment('');
+      // Se já foi assinado pelo conselho, finalizar. Senão, encaminhar para conselho
+      if (hasConselhoSignature) {
+        action = 'Documento finalizado';
+      } else {
+        action = 'Encaminhado para Conselho de Administração';
+      }
+      
+      try {
+        setIsProcessing(true);
+        await advanceDocument(doc.id, action, comment || undefined);
+        toast({ title: 'Ação realizada com sucesso!' });
+        setComment('');
+      } catch (error: any) {
+        console.error('Erro ao encaminhar documento:', error);
+        toast({ 
+          title: 'Erro ao encaminhar documento', 
+          description: error.message || 'Ocorreu um erro inesperado.',
+          variant: 'destructive' 
+        });
+      } finally {
+        setIsProcessing(false);
+      }
       return;
     } else if (user.role === 'conselho_admin') {
       action = 'Aprovado e assinado';
@@ -78,9 +161,15 @@ const DocumentDetailPage = () => {
           throw new Error('A biblioteca pdf-lib não está instalada. Execute: npm install');
         }
 
-        // Carregar o PDF original (sempre usar o original, não o assinado se existir)
-        const originalPdfUrl = '/documento.pdf';
-        const pdfBytes = await fetchPdfAsBytes(originalPdfUrl);
+        // Carregar o PDF original do Storage (sempre usar o original, não o assinado se existir)
+        let pdfBytes: Uint8Array;
+        if (doc.originalPdfStoragePath) {
+          // Baixar o PDF original do Storage usando a função do supabaseService
+          pdfBytes = await supabaseService.downloadSignedPdf(doc.originalPdfStoragePath);
+        } else {
+          // Fallback: usar PDF de demonstração
+          pdfBytes = await fetchPdfAsBytes('/documento.pdf');
+        }
         
         // Aplicar a assinatura no PDF com as dimensões do container e informações do PDF
         // Usar pageNumber da posição (se disponível), senão usar 0 (primeira página)
@@ -109,27 +198,17 @@ const DocumentDetailPage = () => {
         const signedPdfUrl = pdfBytesToDataUrl(signedPdfBytes);
 
         // Avançar o documento com o PDF assinado
-        advanceDocument(doc.id, action, comment || undefined, signatureUrl, signedPdfUrl);
-        
-        // Fazer download automático do PDF assinado
-        try {
-          const link = document.createElement('a');
-          link.href = signedPdfUrl;
-          link.download = `${doc.fileName.replace('.pdf', '')}_assinado.pdf`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        } catch (downloadError) {
-          console.warn('Não foi possível fazer download automático:', downloadError);
-        }
+        await advanceDocument(doc.id, action, comment || undefined, signatureUrl, signedPdfUrl);
         
         toast({ 
           title: 'Documento assinado e aprovado com sucesso!',
-          description: 'O PDF assinado foi salvo e o download foi iniciado automaticamente.'
+          description: 'O PDF assinado foi salvo e o documento foi finalizado.'
         });
+        
         setComment('');
         setSignatureUrl('');
         setSignaturePosition(null);
+        setIsProcessing(false);
       } catch (error) {
         console.error('Erro ao aplicar assinatura no PDF:', error);
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
@@ -156,10 +235,16 @@ const DocumentDetailPage = () => {
     setComment('');
   };
 
-  const advanceLabel =
-    user.role === 'secretaria_geral'
-      ? 'Encaminhar para Conselho'
-      : 'Aprovar e Assinar';
+  // Determinar label do botão baseado no estado do documento
+  const advanceLabel = (() => {
+    if (user.role === 'secretaria_geral') {
+      // Se já foi assinado pelo conselho, finalizar. Senão, encaminhar para conselho
+      return hasConselhoSignature ? 'Finalizar Documento' : 'Encaminhar para Conselho de Administração';
+    } else if (user.role === 'conselho_admin') {
+      return 'Aprovar e Assinar';
+    }
+    return 'Avançar';
+  })();
 
   const getRoleDisplay = (role: string) => {
     return ROLE_LABELS[role as keyof typeof ROLE_LABELS] || role;
@@ -174,8 +259,17 @@ const DocumentDetailPage = () => {
       const loadPdfUrl = async () => {
         try {
           setLoading(true);
-          const url = await getPdfUrl(signedPdfUrl);
+          // Adicionar cache-busting para garantir que o PDF assinado seja carregado
+          let urlToLoad = signedPdfUrl;
+          if (urlToLoad && !urlToLoad.includes('?t=')) {
+            // Se a URL não tem timestamp, adicionar para evitar cache
+            const url = new URL(urlToLoad, window.location.href);
+            url.searchParams.set('t', Date.now().toString());
+            urlToLoad = url.toString();
+          }
+          const url = await getPdfUrl(urlToLoad);
           setDisplayUrl(url);
+          console.log('📄 PDF assinado carregado para visualização:', url);
         } catch (error) {
           console.error('Erro ao carregar URL do PDF:', error);
           toast({
@@ -326,9 +420,96 @@ const DocumentDetailPage = () => {
         />
       )}
 
+      {/* Preview do PDF para Secretaria - quando documento está pendente_secretaria */}
+      {canSecretariaAct && !isConselhoSigning && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Visualização do Documento
+              {hasConselhoSignature && (
+                <span className="ml-2 rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-600">
+                  Assinado pelo Conselho
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="relative w-full border rounded-lg overflow-hidden bg-muted" style={{ minHeight: '600px' }}>
+              {pdfUrlError ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-muted gap-4">
+                  <p className="text-destructive">{pdfUrlError}</p>
+                  <Button variant="outline" onClick={() => {
+                    const link = document.createElement('a');
+                    link.href = displayPdfUrl;
+                    link.target = '_blank';
+                    link.click();
+                  }}>
+                    <FileText className="mr-2 h-4 w-4" />Abrir PDF em Nova Aba
+                  </Button>
+                </div>
+              ) : (
+                <iframe
+                  src={displayPdfUrl}
+                  className="w-full h-full"
+                  style={{ minHeight: '600px' }}
+                  title="Preview do Documento"
+                  onError={() => {
+                    setPdfUrlError('Erro ao carregar PDF');
+                    toast({
+                      title: 'Erro ao carregar PDF',
+                      description: 'Não foi possível exibir o PDF. Tente abrir em nova aba.',
+                      variant: 'destructive',
+                    });
+                  }}
+                />
+              )}
+            </div>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button variant="outline" onClick={() => {
+                const link = document.createElement('a');
+                link.href = displayPdfUrl;
+                link.download = doc.fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}>
+                <FileText className="mr-2 h-4 w-4" />Baixar PDF
+              </Button>
+              <Button variant="outline" onClick={() => {
+                const link = document.createElement('a');
+                link.href = displayPdfUrl;
+                link.target = '_blank';
+                link.click();
+              }}>
+                <FileText className="mr-2 h-4 w-4" />Abrir em Nova Aba
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Visualização do PDF assinado - para documentos finalizados */}
-      {doc.status === 'finalizado' && doc.signedPdfUrl && !isConselhoSigning && (
-        <SignedPdfViewer signedPdfUrl={doc.signedPdfUrl} fileName={doc.fileName} />
+      {/* Mostrar para todos os usuários (Secretaria, Conselho, Área) quando o documento está finalizado */}
+      {/* IMPORTANTE: Documentos finalizados SEMPRE mostram o PDF assinado */}
+      {doc.status === 'finalizado' && (doc.signedPdfUrl || doc.signedPdfStoragePath || doc.originalPdfStoragePath) && !isConselhoSigning && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Documento Finalizado e Assinado
+              <span className="ml-2 rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-600">
+                Assinado Digitalmente
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <SignedPdfViewer 
+              signedPdfUrl={doc.signedPdfUrl || displayPdfUrl} 
+              fileName={doc.fileName} 
+            />
+          </CardContent>
+        </Card>
       )}
 
       <Card>
@@ -357,27 +538,33 @@ const DocumentDetailPage = () => {
       <Card>
         <CardHeader><CardTitle className="text-base">Histórico de Tramitação</CardTitle></CardHeader>
         <CardContent>
-          <div className="relative space-y-0">
-            {doc.history.map((h, i) => (
-              <div key={h.id} className="relative flex gap-4 pb-6 last:pb-0">
-                {i < doc.history.length - 1 && (
-                  <div className="absolute left-[11px] top-6 h-full w-0.5 bg-border" />
-                )}
-                <div className="relative z-10 mt-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary">
-                  <div className="h-2 w-2 rounded-full bg-primary-foreground" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground">{h.action}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {h.userName} ({getRoleDisplay(h.userRole)}) · {format(new Date(h.timestamp), "dd/MM/yyyy 'às' HH:mm")}
-                  </p>
-                  {h.comment && (
-                    <p className="mt-1 rounded-md bg-accent px-3 py-2 text-sm text-foreground">"{h.comment}"</p>
+          {doc.history && doc.history.length > 0 ? (
+            <div className="relative space-y-0">
+              {doc.history.map((h, i) => (
+                <div key={h.id} className="relative flex gap-4 pb-6 last:pb-0">
+                  {i < doc.history.length - 1 && (
+                    <div className="absolute left-[11px] top-6 h-full w-0.5 bg-border" />
                   )}
+                  <div className="relative z-10 mt-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary">
+                    <div className="h-2 w-2 rounded-full bg-primary-foreground" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">{h.action}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {h.userName} ({getRoleDisplay(h.userRole)}) · {format(new Date(h.timestamp), "dd/MM/yyyy 'às' HH:mm")}
+                    </p>
+                    {h.comment && (
+                      <p className="mt-1 rounded-md bg-accent px-3 py-2 text-sm text-foreground">"{h.comment}"</p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              Nenhuma ação registrada ainda.
+            </div>
+          )}
         </CardContent>
       </Card>
 

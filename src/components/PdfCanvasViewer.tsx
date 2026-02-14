@@ -134,10 +134,15 @@ const PdfCanvasViewer = ({ pdfUrl, onPdfLoaded, className = '' }: PdfCanvasViewe
         }
 
         // Carregar o PDF
+        // Se a URL começa com 'data:', carregar diretamente
+        // Se for uma URL HTTP, verificar se precisa de headers CORS
         const loadingTask = pdfjsLib.getDocument({
           url: pdfUrl,
           httpHeaders: {},
           withCredentials: false,
+          // Adicionar opções para melhor compatibilidade
+          verbosity: 0, // Reduzir logs
+          stopAtErrors: false, // Continuar mesmo com erros menores
         });
         
         // Adicionar listeners para debug
