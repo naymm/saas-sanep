@@ -176,6 +176,153 @@ export async function applySignatureToPdf(
 }
 
 /**
+ * Aplica um carimbo em um PDF na posição especificada
+ * Similar a applySignatureToPdf, mas para carimbos
+ * @param pdfBytes - Bytes do PDF (pode já ter assinaturas)
+ * @param stampImageUrl - URL da imagem do carimbo (data URL ou URL)
+ * @param position - Posição do carimbo no PDF (em pixels, será convertido para pontos PDF)
+ * @param pageIndex - Índice da página onde aplicar o carimbo (padrão: 0)
+ * @returns Bytes do PDF com o carimbo aplicado
+ */
+export async function applyStampToPdf(
+  pdfBytes: Uint8Array,
+  stampImageUrl: string,
+  position: SignaturePosition,
+  pageIndex: number = 0
+): Promise<Uint8Array> {
+  // Carregar o PDF
+  let pdfDoc;
+  try {
+    pdfDoc = await PDFDocument.load(pdfBytes);
+  } catch (error) {
+    console.error('Erro ao carregar PDF:', error);
+    throw new Error(`Não foi possível carregar o PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+  }
+
+  // Obter a página onde aplicar o carimbo
+  const pages = pdfDoc.getPages();
+  if (pages.length === 0) {
+    throw new Error('O PDF não possui páginas');
+  }
+  if (pageIndex >= pages.length) {
+    throw new Error(`Página ${pageIndex} não existe no PDF`);
+  }
+  const page = pages[pageIndex];
+  const { width: pageWidth, height: pageHeight } = page.getSize();
+
+  // Carregar a imagem do carimbo
+  let stampImage;
+  try {
+    // Se for uma data URL, extrair os bytes
+    if (stampImageUrl.startsWith('data:')) {
+      const base64 = stampImageUrl.split(',')[1];
+      if (!base64) {
+        throw new Error('Data URL do carimbo inválida');
+      }
+      const imageBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      stampImage = await pdfDoc.embedPng(imageBytes);
+    } else {
+      // Se for uma URL, fazer fetch
+      const response = await fetch(stampImageUrl);
+      if (!response.ok) {
+        throw new Error(`Erro ao buscar carimbo: ${response.statusText}`);
+      }
+      const imageBytes = await response.arrayBuffer();
+      stampImage = await pdfDoc.embedPng(new Uint8Array(imageBytes));
+    }
+  } catch (error) {
+    console.error('Erro ao carregar imagem do carimbo:', error);
+    throw new Error(`Não foi possível carregar a imagem do carimbo: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+  }
+
+  // Obter dimensões do carimbo em pixels (do canvas)
+  const stampWidth = position.width || 150;
+  const stampHeight = position.height || 150;
+
+  // Converter posição de pixels do canvas para pontos PDF
+  let scaleFactor: number;
+  
+  if (position.pdfScale && position.pdfPageWidth && position.pdfPageHeight) {
+    scaleFactor = position.pdfScale;
+    
+    const widthMatch = Math.abs(position.pdfPageWidth - pageWidth) < 10;
+    const heightMatch = Math.abs(position.pdfPageHeight - pageHeight) < 10;
+    
+    if (!widthMatch || !heightMatch) {
+      console.warn('Dimensões da página não correspondem exatamente:', {
+        pdfInfo: { width: position.pdfPageWidth, height: position.pdfPageHeight },
+        actual: { width: pageWidth, height: pageHeight },
+      });
+    }
+    
+    console.log('Usando escala precisa do canvas para carimbo:', scaleFactor);
+  } else {
+    const containerWidth = position.containerWidth || 800;
+    const containerHeight = position.containerHeight || 600;
+    
+    const pageAspectRatio = pageWidth / pageHeight;
+    const containerAspectRatio = containerWidth / containerHeight;
+    
+    if (containerAspectRatio > pageAspectRatio) {
+      scaleFactor = containerHeight / pageHeight;
+    } else {
+      scaleFactor = containerWidth / pageWidth;
+    }
+    
+    if (!isFinite(scaleFactor) || scaleFactor <= 0 || scaleFactor === Infinity || isNaN(scaleFactor)) {
+      scaleFactor = 96 / 72;
+    }
+    console.warn('Usando cálculo de escala (fallback) para carimbo:', scaleFactor);
+  }
+  
+  // Obter dimensões reais da imagem do carimbo
+  const stampDims = stampImage.scale(1);
+  const actualStampWidth = stampDims.width;
+  const actualStampHeight = stampDims.height;
+  
+  // Calcular tamanho do carimbo em pontos PDF
+  const stampWidthInPoints = stampWidth / scaleFactor;
+  const stampHeightInPoints = stampHeight / scaleFactor;
+  
+  // Manter proporção da imagem original do carimbo
+  const imageAspectRatio = actualStampWidth / actualStampHeight;
+  let finalWidth = stampWidthInPoints;
+  let finalHeight = stampWidthInPoints / imageAspectRatio;
+  
+  if (finalHeight > stampHeightInPoints) {
+    finalHeight = stampHeightInPoints;
+    finalWidth = stampHeightInPoints * imageAspectRatio;
+  }
+  
+  // Converter posição X
+  const x = position.x / scaleFactor;
+  
+  // Converter posição Y (inverter do topo para baixo)
+  const yFromTopInPoints = position.y / scaleFactor;
+  const y = pageHeight - yFromTopInPoints - finalHeight;
+  
+  console.log('=== Cálculo de Posicionamento do Carimbo ===');
+  console.log('Posição em pixels (canvas):', { x: position.x, y: position.y });
+  console.log('ScaleFactor usado:', scaleFactor);
+  console.log('Posição em pontos PDF:', { x, y });
+  console.log('Tamanho do carimbo (pixels):', { width: stampWidth, height: stampHeight });
+  console.log('Tamanho do carimbo (pontos PDF):', { width: finalWidth, height: finalHeight });
+  console.log('==========================================');
+  
+  // Aplicar o carimbo na página
+  page.drawImage(stampImage, {
+    x: Math.max(0, Math.min(x, pageWidth - finalWidth)),
+    y: Math.max(0, Math.min(y, pageHeight - finalHeight)),
+    width: Math.min(finalWidth, pageWidth),
+    height: Math.min(finalHeight, pageHeight),
+  });
+
+  // Salvar o PDF modificado
+  const pdfBytesWithStamp = await pdfDoc.save();
+  return pdfBytesWithStamp;
+}
+
+/**
  * Converte um PDF em bytes a partir de uma URL
  */
 export async function fetchPdfAsBytes(pdfUrl: string): Promise<Uint8Array> {

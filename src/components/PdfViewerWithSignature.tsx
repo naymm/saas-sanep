@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { FileText, PenTool, X, Move, Check } from 'lucide-react';
+import { FileText, PenTool, X, Move, Check, Stamp } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import PdfCanvasViewer from './PdfCanvasViewer';
@@ -10,6 +10,10 @@ interface PdfViewerWithSignatureProps {
   signatureUrl?: string; // Assinatura selecionada para este documento
   onSignatureChange: (signatureUrl: string, position?: { x: number; y: number; width?: number; height?: number; containerWidth?: number; containerHeight?: number; pdfScale?: number; pdfPageWidth?: number; pdfPageHeight?: number; pageNumber?: number }) => void;
   onRemoveSignature?: () => void;
+  // Props para carimbo
+  stampUrl?: string; // Carimbo selecionado
+  onStampChange?: (stampUrl: string, position?: { x: number; y: number; width?: number; height?: number; containerWidth?: number; containerHeight?: number; pdfScale?: number; pdfPageWidth?: number; pdfPageHeight?: number; pageNumber?: number }) => void;
+  onRemoveStamp?: () => void;
 }
 
 const PdfViewerWithSignature = ({
@@ -18,17 +22,27 @@ const PdfViewerWithSignature = ({
   signatureUrl,
   onSignatureChange,
   onRemoveSignature,
+  stampUrl,
+  onStampChange,
+  onRemoveStamp,
 }: PdfViewerWithSignatureProps) => {
   const [signaturePosition, setSignaturePosition] = useState({ x: 50, y: 50 });
   const [isDraggingSignature, setIsDraggingSignature] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [signatureDragOffset, setSignatureDragOffset] = useState({ x: 0, y: 0 });
   const [pdfError, setPdfError] = useState(false);
   const [signatureSize, setSignatureSize] = useState({ width: 200, height: 100 });
   const [pdfInfo, setPdfInfo] = useState<{ scale: number; pageWidth: number; pageHeight: number } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [signaturePage, setSignaturePage] = useState<number | null>(null); // Página onde a assinatura foi posicionada
+  // Estados para carimbo
+  const [stampPosition, setStampPosition] = useState({ x: 200, y: 50 });
+  const [isDraggingStamp, setIsDraggingStamp] = useState(false);
+  const [stampDragOffset, setStampDragOffset] = useState({ x: 0, y: 0 });
+  const [stampSize, setStampSize] = useState({ width: 150, height: 150 });
+  const [stampPage, setStampPage] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signatureRef = useRef<HTMLImageElement>(null);
+  const stampRef = useRef<HTMLImageElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
 
   const handlePdfLoaded = useCallback((pageWidth: number, pageHeight: number, scale: number, canvasWidth: number, canvasHeight: number, pageNumber?: number, totalPages?: number) => {
@@ -76,11 +90,30 @@ const PdfViewerWithSignature = ({
     (e: React.MouseEvent) => {
       if (!signatureRef.current) return;
       e.preventDefault();
+      e.stopPropagation();
       setIsDraggingSignature(true);
       const rect = signatureRef.current.getBoundingClientRect();
       const containerRect = canvasContainerRef.current?.getBoundingClientRect();
       if (containerRect) {
-        setDragOffset({
+        setSignatureDragOffset({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        });
+      }
+    },
+    []
+  );
+
+  const handleStampMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!stampRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingStamp(true);
+      const rect = stampRef.current.getBoundingClientRect();
+      const containerRect = canvasContainerRef.current?.getBoundingClientRect();
+      if (containerRect) {
+        setStampDragOffset({
           x: e.clientX - rect.left,
           y: e.clientY - rect.top,
         });
@@ -91,55 +124,92 @@ const PdfViewerWithSignature = ({
 
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
-      if (!isDraggingSignature || !canvasContainerRef.current || !signatureRef.current) return;
+      if (isDraggingSignature && canvasContainerRef.current && signatureRef.current) {
+        const containerRect = canvasContainerRef.current.getBoundingClientRect();
+        const signatureRect = signatureRef.current.getBoundingClientRect();
+        
+        const newX = e.clientX - containerRect.left - signatureDragOffset.x;
+        const newY = e.clientY - containerRect.top - signatureDragOffset.y;
 
-      const containerRect = canvasContainerRef.current.getBoundingClientRect();
-      const signatureRect = signatureRef.current.getBoundingClientRect();
+        const signatureWidth = signatureRect.width || 200;
+        const signatureHeight = signatureRect.height || 100;
+        const maxX = containerRect.width - signatureWidth;
+        const maxY = containerRect.height - signatureHeight;
+
+        const newPosition = {
+          x: Math.max(0, Math.min(newX, maxX)),
+          y: Math.max(0, Math.min(newY, maxY)),
+        };
+        setSignaturePosition(newPosition);
+      }
       
-      // Calcular nova posição relativa ao container do canvas
-      const newX = e.clientX - containerRect.left - dragOffset.x;
-      const newY = e.clientY - containerRect.top - dragOffset.y;
+      if (isDraggingStamp && canvasContainerRef.current && stampRef.current) {
+        const containerRect = canvasContainerRef.current.getBoundingClientRect();
+        const stampRect = stampRef.current.getBoundingClientRect();
+        
+        const newX = e.clientX - containerRect.left - stampDragOffset.x;
+        const newY = e.clientY - containerRect.top - stampDragOffset.y;
 
-      // Limitar dentro do container considerando o tamanho real da assinatura
-      const signatureWidth = signatureRect.width || 200;
-      const signatureHeight = signatureRect.height || 100;
-      const maxX = containerRect.width - signatureWidth;
-      const maxY = containerRect.height - signatureHeight;
+        const stampWidth = stampRect.width || 150;
+        const stampHeight = stampRect.height || 150;
+        const maxX = containerRect.width - stampWidth;
+        const maxY = containerRect.height - stampHeight;
 
-      const newPosition = {
-        x: Math.max(0, Math.min(newX, maxX)),
-        y: Math.max(0, Math.min(newY, maxY)),
-      };
-      setSignaturePosition(newPosition);
+        const newPosition = {
+          x: Math.max(0, Math.min(newX, maxX)),
+          y: Math.max(0, Math.min(newY, maxY)),
+        };
+        setStampPosition(newPosition);
+      }
     },
-    [isDraggingSignature, dragOffset]
+    [isDraggingSignature, isDraggingStamp, signatureDragOffset, stampDragOffset]
   );
 
   const handleMouseUp = useCallback(() => {
-    setIsDraggingSignature(false);
-    // Atualizar posição no callback quando soltar o mouse
-    if (signatureUrl && signaturePosition && canvasContainerRef.current && signatureRef.current) {
-      const containerRect = canvasContainerRef.current.getBoundingClientRect();
-      const imgRect = signatureRef.current.getBoundingClientRect();
-      // Atualizar a página da assinatura para a página atual
-      setSignaturePage(currentPage);
-      onSignatureChange(signatureUrl, {
-        ...signaturePosition,
-        width: imgRect.width,
-        height: imgRect.height,
-        containerWidth: containerRect.width,
-        containerHeight: containerRect.height,
-        pdfScale: pdfInfo?.scale,
-        pdfPageWidth: pdfInfo?.pageWidth,
-        pdfPageHeight: pdfInfo?.pageHeight,
-        pageNumber: currentPage, // Incluir número da página atual
-      });
-    }
-  }, [signatureUrl, signaturePosition, onSignatureChange, pdfInfo, currentPage]);
-
-  // Adicionar event listeners para drag da assinatura
-  useEffect(() => {
     if (isDraggingSignature) {
+      setIsDraggingSignature(false);
+      if (signatureUrl && signaturePosition && canvasContainerRef.current && signatureRef.current) {
+        const containerRect = canvasContainerRef.current.getBoundingClientRect();
+        const imgRect = signatureRef.current.getBoundingClientRect();
+        setSignaturePage(currentPage);
+        onSignatureChange(signatureUrl, {
+          ...signaturePosition,
+          width: imgRect.width,
+          height: imgRect.height,
+          containerWidth: containerRect.width,
+          containerHeight: containerRect.height,
+          pdfScale: pdfInfo?.scale,
+          pdfPageWidth: pdfInfo?.pageWidth,
+          pdfPageHeight: pdfInfo?.pageHeight,
+          pageNumber: currentPage,
+        });
+      }
+    }
+    
+    if (isDraggingStamp) {
+      setIsDraggingStamp(false);
+      if (stampUrl && stampPosition && canvasContainerRef.current && stampRef.current && onStampChange) {
+        const containerRect = canvasContainerRef.current.getBoundingClientRect();
+        const imgRect = stampRef.current.getBoundingClientRect();
+        setStampPage(currentPage);
+        onStampChange(stampUrl, {
+          ...stampPosition,
+          width: imgRect.width,
+          height: imgRect.height,
+          containerWidth: containerRect.width,
+          containerHeight: containerRect.height,
+          pdfScale: pdfInfo?.scale,
+          pdfPageWidth: pdfInfo?.pageWidth,
+          pdfPageHeight: pdfInfo?.pageHeight,
+          pageNumber: currentPage,
+        });
+      }
+    }
+  }, [isDraggingSignature, isDraggingStamp, signatureUrl, stampUrl, signaturePosition, stampPosition, onSignatureChange, onStampChange, pdfInfo, currentPage]);
+
+  // Adicionar event listeners para drag da assinatura e carimbo
+  useEffect(() => {
+    if (isDraggingSignature || isDraggingStamp) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
       return () => {
@@ -147,7 +217,7 @@ const PdfViewerWithSignature = ({
         window.removeEventListener('mouseup', handleMouseUp);
       };
     }
-  }, [isDraggingSignature, handleMouseMove, handleMouseUp]);
+  }, [isDraggingSignature, isDraggingStamp, handleMouseMove, handleMouseUp]);
 
   // Resetar página da assinatura quando a assinatura for removida
   useEffect(() => {
@@ -155,6 +225,34 @@ const PdfViewerWithSignature = ({
       setSignaturePage(null);
     }
   }, [signatureUrl]);
+
+  // Resetar página do carimbo quando o carimbo for removido
+  useEffect(() => {
+    if (!stampUrl) {
+      setStampPage(null);
+    }
+  }, [stampUrl]);
+
+  // Quando o carimbo é definido, posicionar automaticamente
+  useEffect(() => {
+    if (stampUrl && canvasContainerRef.current && !stampPage && onStampChange) {
+      const containerRect = canvasContainerRef.current.getBoundingClientRect();
+      const initialPosition = { x: 200, y: 50 }; // Posição inicial diferente da assinatura
+      setStampPosition(initialPosition);
+      setStampPage(currentPage);
+      onStampChange(stampUrl, {
+        ...initialPosition,
+        width: 150,
+        height: 150,
+        containerWidth: containerRect.width,
+        containerHeight: containerRect.height,
+        pdfScale: pdfInfo?.scale,
+        pdfPageWidth: pdfInfo?.pageWidth,
+        pdfPageHeight: pdfInfo?.pageHeight,
+        pageNumber: currentPage,
+      });
+    }
+  }, [stampUrl, currentPage, pdfInfo, stampPage, onStampChange]);
 
   return (
     <Card>
@@ -266,17 +364,69 @@ const PdfViewerWithSignature = ({
                 </div>
               </div>
             )}
+            
+            {/* Carimbo sobreposto - apenas na página onde foi posicionado */}
+            {stampUrl && stampPage === currentPage && (
+              <div
+                ref={stampRef}
+                style={{
+                  position: 'absolute',
+                  left: `${stampPosition.x}px`,
+                  top: `${stampPosition.y}px`,
+                  cursor: isDraggingStamp ? 'grabbing' : 'grab',
+                  zIndex: 11, // Carimbo acima da assinatura
+                }}
+                onMouseDown={handleStampMouseDown}
+                className="group"
+              >
+                <div className="relative inline-block">
+                  <img
+                    src={stampUrl}
+                    alt="Carimbo"
+                    className="max-w-[150px] max-h-[150px] object-contain drop-shadow-lg"
+                    draggable={false}
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setStampSize({
+                        width: img.naturalWidth || 150,
+                        height: img.naturalHeight || 150,
+                      });
+                    }}
+                  />
+                  <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="bg-background/80 rounded-full p-1">
+                      <Move className="h-3 w-3 text-muted-foreground" />
+                    </div>
+                    {onRemoveStamp && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveStamp();
+                        }}
+                        className="bg-destructive/80 rounded-full p-1 hover:bg-destructive"
+                      >
+                        <X className="h-3 w-3 text-destructive-foreground" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Instruções */}
-        {signatureUrl && (
+        {(signatureUrl || stampUrl) && (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground text-center">
-              Arraste a assinatura para reposicioná-la no documento
+              {signatureUrl && stampUrl 
+                ? 'Arraste a assinatura e o carimbo para reposicioná-los no documento'
+                : signatureUrl 
+                ? 'Arraste a assinatura para reposicioná-la no documento'
+                : 'Arraste o carimbo para reposicioná-lo no documento'}
             </p>
-            {onRemoveSignature && (
-              <div className="flex justify-center">
+            <div className="flex justify-center gap-2">
+              {onRemoveSignature && signatureUrl && (
                 <Button 
                   variant="outline" 
                   size="sm" 
@@ -286,8 +436,19 @@ const PdfViewerWithSignature = ({
                   <X className="h-3 w-3" />
                   Remover Assinatura
                 </Button>
-              </div>
-            )}
+              )}
+              {onRemoveStamp && stampUrl && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={onRemoveStamp}
+                  className="gap-2"
+                >
+                  <X className="h-3 w-3" />
+                  Remover Carimbo
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </CardContent>

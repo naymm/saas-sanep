@@ -12,9 +12,10 @@ import { format } from 'date-fns';
 import { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import PdfViewerWithSignature from '@/components/PdfViewerWithSignature';
-import { applySignatureToPdf, fetchPdfAsBytes, pdfBytesToDataUrl } from '@/lib/pdfUtils';
+import { applySignatureToPdf, applyStampToPdf, fetchPdfAsBytes, pdfBytesToDataUrl } from '@/lib/pdfUtils';
 import { getPdfUrl } from '@/lib/pdfStorage';
 import * as supabaseService from '@/lib/supabaseService';
+import { Stamp } from 'lucide-react';
 
 const DocumentDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -32,6 +33,18 @@ const DocumentDetailPage = () => {
   const [conselhoAssignmentType, setConselhoAssignmentType] = useState<'single' | 'all'>('single');
   const [selectedConselhoUserId, setSelectedConselhoUserId] = useState<string>('');
   const users = useStore((s) => s.users);
+  // Estados para seleção de empresa e carimbo
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
+  const [selectedStampId, setSelectedStampId] = useState<string>('');
+  const [stampUrl, setStampUrl] = useState<string>('');
+  const [stampPosition, setStampPosition] = useState<{ x: number; y: number; width?: number; height?: number; containerWidth?: number; containerHeight?: number; pdfScale?: number; pdfPageWidth?: number; pdfPageHeight?: number; pageNumber?: number } | null>(null);
+  const companies = useStore((s) => s.companies);
+  const companyStamps = useStore((s) => s.companyStamps);
+  
+  // Filtrar carimbos por empresa selecionada
+  const availableStamps = selectedCompanyId 
+    ? companyStamps.filter(stamp => stamp.companyId === selectedCompanyId)
+    : [];
   
   // Filtrar apenas membros do conselho
   const conselhoMembers = users.filter((u) => u.role === 'conselho_admin');
@@ -289,11 +302,11 @@ const DocumentDetailPage = () => {
         
         // Aplicar a assinatura no PDF com as dimensões do container e informações do PDF
         // Usar pageNumber da posição (se disponível), senão usar 0 (primeira página)
-        const pageIndex = (signaturePosition.pageNumber !== undefined) 
+        const signaturePageIndex = (signaturePosition.pageNumber !== undefined) 
           ? signaturePosition.pageNumber - 1  // Converter para índice baseado em 0
           : 0;
         
-        const signedPdfBytes = await applySignatureToPdf(
+        let pdfBytesWithSignature = await applySignatureToPdf(
           pdfBytes,
           signatureUrl,
           {
@@ -307,13 +320,38 @@ const DocumentDetailPage = () => {
             pdfPageWidth: signaturePosition.pdfPageWidth,
             pdfPageHeight: signaturePosition.pdfPageHeight,
           },
-          pageIndex // Passar o índice da página onde a assinatura foi posicionada
+          signaturePageIndex // Passar o índice da página onde a assinatura foi posicionada
         );
 
-        // Converter para data URL base64 (persistente)
-        const signedPdfUrl = pdfBytesToDataUrl(signedPdfBytes);
+        // Se houver carimbo selecionado, aplicar após a assinatura
+        if (stampUrl && stampPosition) {
+          const stampPageIndex = (stampPosition.pageNumber !== undefined)
+            ? stampPosition.pageNumber - 1
+            : 0;
+          
+          pdfBytesWithSignature = await applyStampToPdf(
+            pdfBytesWithSignature,
+            stampUrl,
+            {
+              x: stampPosition.x,
+              y: stampPosition.y,
+              width: stampPosition.width || 150,
+              height: stampPosition.height || 150,
+              containerWidth: stampPosition.containerWidth,
+              containerHeight: stampPosition.containerHeight,
+              pdfScale: stampPosition.pdfScale,
+              pdfPageWidth: stampPosition.pdfPageWidth,
+              pdfPageHeight: stampPosition.pdfPageHeight,
+            },
+            stampPageIndex
+          );
+        }
 
-        // Avançar o documento com o PDF assinado
+        // Converter para data URL base64 (persistente)
+        const signedPdfUrl = pdfBytesToDataUrl(pdfBytesWithSignature);
+
+        // Avançar o documento com o PDF assinado (e carimbado, se houver)
+        // O carimbo já está aplicado no PDF (signedPdfUrl), não precisa passar separadamente
         await advanceDocument(doc.id, action, comment || undefined, signatureUrl, signedPdfUrl);
         
         toast({ 
@@ -324,6 +362,10 @@ const DocumentDetailPage = () => {
         setComment('');
         setSignatureUrl('');
         setSignaturePosition(null);
+        setSelectedCompanyId('');
+        setSelectedStampId('');
+        setStampUrl('');
+        setStampPosition(null);
         setIsProcessing(false);
       } catch (error) {
         console.error('Erro ao aplicar assinatura no PDF:', error);
@@ -517,23 +559,115 @@ const DocumentDetailPage = () => {
         </span>
       </div>
 
-      {/* PDF Viewer com Assinatura - apenas para conselho assinando */}
+      {/* PDF Viewer com Assinatura e Carimbo - apenas para conselho assinando */}
       {isConselhoSigning && (
-        <PdfViewerWithSignature
-          pdfUrl={displayPdfUrl}
-          defaultSignatureUrl={user.signatureUrl}
-          signatureUrl={signatureUrl}
-          onSignatureChange={(url, position) => {
-            setSignatureUrl(url);
-            if (position) {
-              setSignaturePosition(position);
-            }
-          }}
-          onRemoveSignature={() => {
-            setSignatureUrl('');
-            setSignaturePosition(null);
-          }}
-        />
+        <>
+          <PdfViewerWithSignature
+            pdfUrl={displayPdfUrl}
+            defaultSignatureUrl={user.signatureUrl}
+            signatureUrl={signatureUrl}
+            onSignatureChange={(url, position) => {
+              setSignatureUrl(url);
+              if (position) {
+                setSignaturePosition(position);
+              }
+            }}
+            onRemoveSignature={() => {
+              setSignatureUrl('');
+              setSignaturePosition(null);
+            }}
+            stampUrl={stampUrl}
+            onStampChange={(url, position) => {
+              setStampUrl(url);
+              if (position) {
+                setStampPosition(position);
+              }
+            }}
+            onRemoveStamp={() => {
+              setStampUrl('');
+              setStampPosition(null);
+              setSelectedStampId('');
+            }}
+          />
+          
+          {/* Seleção de Empresa e Carimbo - apenas após assinatura estar posicionada */}
+          {signatureUrl && signaturePosition && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Stamp className="h-5 w-5" />
+                  Selecionar Carimbo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Empresa *</Label>
+                  <Select
+                    value={selectedCompanyId}
+                    onValueChange={(value) => {
+                      setSelectedCompanyId(value);
+                      setSelectedStampId(''); // Limpar carimbo quando mudar empresa
+                      setStampUrl('');
+                      setStampPosition(null);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione a empresa" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies.map((company) => (
+                        <SelectItem key={company.id} value={company.id}>
+                          {company.name} ({company.code})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                {selectedCompanyId && availableStamps.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Título do Carimbo *</Label>
+                    <Select
+                      value={selectedStampId}
+                      onValueChange={(value) => {
+                        setSelectedStampId(value);
+                        const selectedStamp = availableStamps.find(s => s.id === value);
+                        if (selectedStamp) {
+                          setStampUrl(selectedStamp.stampUrl);
+                          setStampPosition(null); // Resetar posição para posicionar novamente
+                        }
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione o carimbo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableStamps.map((stamp) => (
+                          <SelectItem key={stamp.id} value={stamp.id}>
+                            <div className="flex items-center gap-2">
+                              <img 
+                                src={stamp.stampUrl} 
+                                alt={stamp.title}
+                                className="h-6 w-6 object-contain"
+                              />
+                              <span>{stamp.title}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                
+                {selectedCompanyId && availableStamps.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhum carimbo cadastrado para esta empresa.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
       {/* Preview do PDF para Área (criador) - quando documento está em tramitação */}
